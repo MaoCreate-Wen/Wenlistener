@@ -1,0 +1,71 @@
+name: wenlistener
+description: "WenListener — an Apple Music-style player for Migu and NetEase Cloud Music, with karaoke word-by-word lyrics."
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+version: 1.9.2+28
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
+# Dependencies specify other packages that your package needs in order to work.
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # The following adds the Cupertino Icons font to your application.
+  cupertino_icons: ^1.0.8
+
+  # Networking backbone for the weapi (Netease) layer.
+  dio: ^5.7.0
+  cookie_jar: ^4.0.8
+  dio_cookie_manager: ^3.1.1
+  path_provider: ^2.1.5
+  pointycastle: ^3.9.1
+
+  # Routing + shell.
+  go_router: ^14.6.2
+
+  # Images / QR / palette.
+  cached_network_image: ^3.4.1
+  qr_flutter: ^4.1.0
+  palette_generator: ^0.3.3+5
+  flutter_svg_icons: ^0.0.1+4
+
+  # Audio. just_audio plays; audio_service mirrors playback to the system media
+  # notification / lock screen via a custom passive WenAudioHandler (controls:
+  # prev · play/pause · next — NO stop) over the shared com.ryanheise.audioservice
+  # native service. Replaces just_audio_background, which hardcoded a stop control
+  # (not config-removable) and defaulted the small icon to the colourful launcher
+  # mipmap; we use audio_service directly to drop both.
+  just_audio: ^0.9.46
+  audio_service: ^0.18.19
+
+  # Runtime permissions: POST_NOTIFICATIONS on Android 13+ so the media
+  # notification is allowed to show (reused later for RECORD_AUDIO).
+  permission_handler: ^11.3.1
+
+  # State.
+  provider: ^6.1.2
+
+  # Local-music import: pick audio files / a folder to scan (SAF-backed on
+  # Android, so no broad storage permission is needed for user-picked files).
+  file_picker: ^8.1.7
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  # Recommended lints for Flutter apps.
+  flutter_lints: ^5.0.0
+
+# The following section is specific to Flutter packages.
+flutter:
+  assets:
+   - assets/
+  uses-material-design: true
+  fonts:
+    - family: AlimamaDongFangDaKai
+      fonts:
+        - asset: fonts/AlimamaDongFangDaKai.ttf

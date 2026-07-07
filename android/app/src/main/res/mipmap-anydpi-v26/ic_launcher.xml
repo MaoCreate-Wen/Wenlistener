@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- API 26+ adaptive launcher icon. Resolves @mipmap/ic_launcher to this on
+     Android 8+, while pre-26 devices fall back to the raster mipmap-*dpi PNGs.
+     <monochrome> drives the Android 13+ themed-icon (tinted) treatment. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background"/>
+    <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+    <monochrome android:drawable="@drawable/ic_launcher_foreground"/>
+</adaptive-icon>

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Resource-shrinker keep list.
+
+  @drawable/ic_stat_music (the media-notification small icon) is referenced only by
+  name at runtime: main.dart passes 'drawable/ic_stat_music' to
+  AudioServiceConfig.androidNotificationIcon and audio_service resolves it via
+  Resources.getIdentifier(). That string lives in the Dart snapshot (libapp.so),
+  which R8's resource shrinker never scans, so a release build (minify plus
+  shrinkResources on) judged the drawable unused and stripped it. getIdentifier()
+  then returned 0, setSmallIcon(0) built a notification with no valid small icon,
+  and NotificationManager.notify() crashed the app on first play:
+    java.lang.IllegalArgumentException: Invalid notification (no valid small icon)
+  Debug builds do not shrink resources, so this only ever crashed in release.
+
+  Keeping this one drawable fixes the crash while leaving shrinking on elsewhere.
+  Add any other resource looked up only by a Dart or reflection string here too.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_stat_music" />

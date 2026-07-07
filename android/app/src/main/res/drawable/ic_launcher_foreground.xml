@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon foreground (API 26+): a bold, modern beamed eighth-note pair
+     (two heads + stems joined by a rounded beam) in pure white for maximum
+     legibility over the indigo background, in the Apple-Music white-note-on-
+     gradient spirit. Pure shapes (circles + rounded rects) so it stays crisp
+     at mdpi (48px). The whole glyph is wrapped in a <group> scaled to 0.88 about
+     the canvas centre (54,54) so every extreme point sits inside the ~66dp
+     adaptive safe-zone circle (max radius 36.5 * 0.88 = 32.1 < 33). The same
+     drawable doubles as the Android 13+ themed (monochrome) silhouette. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:name="note"
+        android:pivotX="54"
+        android:pivotY="54"
+        android:scaleX="0.88"
+        android:scaleY="0.88">
+        <!-- Beam: rounded bar joining the two stem tops (x 43.5..78.5, y 27..38). -->
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M46.5,27 H75.5 A3,3 0 0 1 78.5,30 V35 A3,3 0 0 1 75.5,38 H46.5 A3,3 0 0 1 43.5,35 V30 A3,3 0 0 1 46.5,27 Z"/>
+        <!-- Left stem (right edge of left head). -->
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M43.5,30 H48.5 V73 H43.5 Z"/>
+        <!-- Right stem (right edge of right head). -->
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M73.5,30 H78.5 V73 H73.5 Z"/>
+        <!-- Left note head: circle centred (39,73) r9.5. -->
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M29.5,73 A9.5,9.5 0 1 0 48.5,73 A9.5,9.5 0 1 0 29.5,73 Z"/>
+        <!-- Right note head: circle centred (69,73) r9.5. -->
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M59.5,73 A9.5,9.5 0 1 0 78.5,73 A9.5,9.5 0 1 0 59.5,73 Z"/>
+    </group>
+</vector>
