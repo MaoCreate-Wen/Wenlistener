@@ -39,9 +39,13 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Cap the in-memory image cache so a library full of album covers can't balloon the working set
-  // (default is 1000 images / 100 MB; on desktop we bound it explicitly to ~150 MB). Combined with
-  // ArtworkImage's display-size decode (ResizeImage), this keeps cover memory in check.
-  PaintingBinding.instance.imageCache.maximumSizeBytes = 150 << 20;
+  // (default is 1000 images / 100 MB). 64 MB: every now-playing-path decode is display/analysis
+  // sized (ResizeImage buckets ≤ 640² ≈ 1.6 MB, palette/mesh analysis 128² ≈ 64 KB), so 64 MB
+  // holds ~40 big-bucket covers — while any stray full-resolution decode (a 2000-3000px Netease
+  // cover is a 25-36 MB RGBA entry; several such paths used to pin the old 150 MB cap forever,
+  // measured as the #1 driver of the 400-500 MB lyrics-page working set) is now evicted quickly
+  // instead of parking ~150 MB in the working set for the rest of the session.
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 64 << 20;
 
   // (A) DESKTOP WINDOW — frameless, min 1024x680, centered, shown BEFORE runApp.
   // window_manager's APIs throw on non-desktop platforms, so this is guarded to

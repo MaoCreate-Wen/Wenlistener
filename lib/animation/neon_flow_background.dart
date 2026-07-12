@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 
 import '../models/image_url.dart';
+import '../services/artwork_palette.dart' show kCoverAnalysisDecodeDim;
 import '../theme/app_colors.dart';
 import 'mesh_gradient/album_texture.dart';
 import 'mesh_gradient/bhp_mesh.dart';
@@ -462,8 +463,16 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
     List<Color> depthColors,
   ) async {
     try {
-      final ImageProvider provider =
-          CachedNetworkImageProvider(url, headers: kNeteaseImageHeaders);
+      // Decode at the shared 128² analysis size ([kCoverAnalysisDecodeDim]) —
+      // this builder immediately reduces the cover to a 32² texture, so a
+      // native-resolution decode (25-36 MB RGBA per Netease cover, measured)
+      // bought nothing; the ResizeImage construction is IDENTICAL to
+      // ArtworkPalette's, so palette + mesh resolve one ~64 KB cache entry.
+      final ImageProvider provider = ResizeImage.resizeIfNeeded(
+        kCoverAnalysisDecodeDim,
+        kCoverAnalysisDecodeDim,
+        CachedNetworkImageProvider(url, headers: kNeteaseImageHeaders),
+      );
       final Completer<ui.Image> completer = Completer<ui.Image>();
       final ImageStream stream = provider.resolve(const ImageConfiguration());
       late final ImageStreamListener listener;

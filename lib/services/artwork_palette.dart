@@ -9,6 +9,14 @@ import 'package:palette_generator/palette_generator.dart';
 import '../models/image_url.dart';
 import '../theme/app_colors.dart';
 
+/// Decode dimension for cover ANALYSIS consumers (palette quantization here,
+/// the 32² mesh-gradient texture in `NeonFlowBackground`). Both sample colour
+/// statistics, not pixels-for-display, so a 128² decode is lossless for their
+/// purposes while replacing the native-resolution decode (25-36 MB RGBA for a
+/// typical Netease cover) with a ~64 KB cache entry. Shared so both consumers
+/// construct an IDENTICAL ResizeImage provider — equal key ⇒ one decode.
+const int kCoverAnalysisDecodeDim = 128;
+
 /// Result of extracting a dynamic palette from album art.
 class PaletteResult {
   /// Dominant vibrant accent (drives progress bar, nav pill, glow, etc.).
@@ -68,8 +76,21 @@ class ArtworkPalette {
     try {
       // The image *decode* must run on the root isolate (`dart:ui`), so resolve
       // and rasterize the cover here, then hand the raw RGBA bytes off-thread.
+      //
+      // Decode at a SMALL fixed target ([kCoverAnalysisDecodeDim]², via
+      // ResizeImage) — median-cut palette quality is insensitive to resolution,
+      // but the raw provider decoded the cover at its native size (Netease art
+      // is routinely 2000-3000px ⇒ a 25-36 MB RGBA imageCache entry PER TRACK,
+      // measured as the dominant driver of the 400-500 MB lyrics-page working
+      // set). The 128² entry is ~64 KB and quantizes ~16k pixels instead of
+      // ~6M on the background isolate. The construction matches the mesh
+      // texture builder's exactly, so both resolve ONE shared cache entry.
       final ui.Image image = await _resolveCoverImage(
-        CachedNetworkImageProvider(url, headers: kNeteaseImageHeaders),
+        ResizeImage.resizeIfNeeded(
+          kCoverAnalysisDecodeDim,
+          kCoverAnalysisDecodeDim,
+          CachedNetworkImageProvider(url, headers: kNeteaseImageHeaders),
+        ),
       );
       final ByteData? bytes =
           await image.toByteData(format: ui.ImageByteFormat.rawRgba);

@@ -11,7 +11,7 @@ import '../../state/settings_provider.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_dimens.dart';
 import '../../theme/app_typography.dart';
-import '../player/widgets/player_artwork.dart';
+import '../../widgets/artwork_image.dart';
 import 'widgets/lyrics_view.dart';
 
 /// The lyrics-maximized full-bleed route (`/lyrics`): the AMLL [LyricsView] over
@@ -140,7 +140,10 @@ class _Header extends StatelessWidget {
       ),
       child: Row(
         children: <Widget>[
-          PlayerArtwork(
+          // Bucketed decode (ArtworkImage/ResizeImage) — the old PlayerArtwork
+          // resolved the RAW provider here, decoding the full-resolution cover
+          // (25-36 MB RGBA) for a 52px thumbnail on every /lyrics open.
+          ArtworkImage(
             url: artworkUrl,
             size: 52,
             radius: AppDimens.radiusSm,
