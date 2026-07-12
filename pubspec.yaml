@@ -1,0 +1,55 @@
+name: wenlistener_desktop
+description: "WenListener Desktop — an independent PC (Windows) client for NetEase/QQ/Kugou/Kuwo, with its own desktop-native UI. Reuses the mobile app's logic layer (services/models/state/animation); the UI is built fresh for desktop."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
+# Mirrors the mobile app's deps so the copied logic layer compiles unchanged.
+# Desktop additions: just_audio_windows (Media Foundation) + window_manager.
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  dio: ^5.7.0
+  cookie_jar: ^4.0.8
+  dio_cookie_manager: ^3.1.1
+  path_provider: ^2.1.5
+  pointycastle: ^3.9.1
+
+  go_router: ^14.6.2
+
+  cached_network_image: ^3.4.1
+  qr_flutter: ^4.1.0
+  palette_generator: ^0.3.3+5
+  flutter_svg_icons: ^0.0.1+4
+
+  just_audio: ^0.9.46
+  audio_service: ^0.18.19
+  just_audio_windows: ^0.2.3
+
+  permission_handler: ^11.3.1
+
+  provider: ^6.1.2
+
+  window_manager: ^0.5.2
+
+  file_picker: ^8.1.7
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  assets:
+   - assets/
+  uses-material-design: true
+  fonts:
+    - family: AlimamaDongFangDaKai
+      fonts:
+        - asset: fonts/AlimamaDongFangDaKai.ttf

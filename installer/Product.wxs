@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WenListener Windows MSI (WiX v3 authoring).
+
+  Preprocessor variables supplied by build_msi.ps1 via candle -d:
+    ProductVersion  e.g. 1.0.0        (parsed from pubspec.yaml, +build suffix stripped)
+    ReleaseDir      absolute path to build\windows\x64\runner\Release
+    IconFile        absolute path to windows\runner\resources\app_icon.ico
+
+  The file payload itself lives in the heat-generated AppFiles.wxs
+  (ComponentGroup "AppFiles", rooted at INSTALLFOLDER), regenerated on
+  every build so new plugin DLLs / assets are never silently dropped.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
+  <Product Id="*"
+           Name="WenListener"
+           Language="1033"
+           Version="$(var.ProductVersion)"
+           Manufacturer="WenListener"
+           UpgradeCode="8510F5AD-E1EF-4049-B503-3C0FDA5589D7">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Platform="x64"
+             Description="WenListener $(var.ProductVersion) Setup"
+             Manufacturer="WenListener" />
+
+    <!-- Newer version replaces older in one step; block downgrades. -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of WenListener is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- App icon: shortcuts + Add/Remove Programs entry. -->
+    <Icon Id="AppIcon.ico" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+
+    <!-- Optional desktop shortcut: default on; disable with DESKTOP_SHORTCUT=0. -->
+    <Property Id="DESKTOP_SHORTCUT" Value="1" />
+
+    <!-- Install-directory selection UI. -->
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <UIRef Id="WixUI_InstallDir" />
+    <UIRef Id="WixUI_ErrorProgressText" />
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="WenListener" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="AppProgramMenuFolder" Name="WenListener" />
+      </Directory>
+      <Directory Id="DesktopFolder" Name="Desktop" />
+    </Directory>
+
+    <!-- Start-menu shortcut (HKCU registry value as KeyPath: the standard
+         WiX pattern for non-advertised shortcuts). -->
+    <DirectoryRef Id="AppProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="A3C7E5D1-9B42-4F0A-8E67-2D51C8B0F314">
+        <Shortcut Id="StartMenuAppShortcut"
+                  Name="WenListener"
+                  Description="WenListener music player"
+                  Target="[INSTALLFOLDER]wenlistener_desktop.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="AppIcon.ico" />
+        <RemoveFolder Id="RemoveAppProgramMenuFolder" On="uninstall" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\WenListener\WenListener"
+                       Name="StartMenuShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- Optional desktop shortcut. -->
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="6F2B9C48-1E7D-4A53-9C80-B4E6D3A17F25">
+        <Condition>DESKTOP_SHORTCUT = "1"</Condition>
+        <Shortcut Id="DesktopAppShortcut"
+                  Name="WenListener"
+                  Description="WenListener music player"
+                  Target="[INSTALLFOLDER]wenlistener_desktop.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="AppIcon.ico" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\WenListener\WenListener"
+                       Name="DesktopShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="MainFeature" Title="WenListener" Level="1" Absent="disallow">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
+    </Feature>
+
+  </Product>
+</Wix>
