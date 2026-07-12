@@ -13,6 +13,7 @@ import '../../../theme/app_colors.dart';
 import '../../../theme/app_dimens.dart';
 import '../../../theme/app_typography.dart';
 import 'karaoke_text.dart';
+import 'line_edge_fade.dart';
 import 'lyric_line_widget.dart';
 
 /// The reusable AMLL lyric stack: a self-contained, absolutely-positioned
@@ -33,6 +34,8 @@ class LyricsView extends StatefulWidget {
     this.translationStyle,
     this.showInterludeDots = true,
     this.alignPosition = 0.42,
+    this.fadeTopFraction = 0,
+    this.fadeBottomFraction = 0,
     this.onTapLine,
   });
 
@@ -40,6 +43,16 @@ class LyricsView extends StatefulWidget {
   final TextStyle? mainStyle;
   final TextStyle? translationStyle;
   final bool showInterludeDots;
+
+  /// Built-in vertical edge fade: lines dissolve over the top
+  /// [fadeTopFraction] / bottom [fadeBottomFraction] of the view height
+  /// (0 = off). Replaces wrapping the whole view in a `ShaderMask(dstIn)` —
+  /// which cost a full-view `saveLayer` EVERY frame — with the per-line
+  /// [LineEdgeFade], whose mask layers are line-sized and exist only for the
+  /// few lines actually touching a band. Same gradient (transparent → white →
+  /// white → transparent at `[0, top, 1-bottom, 1]`), same pixels.
+  final double fadeTopFraction;
+  final double fadeBottomFraction;
 
   /// Fraction of the view height the active line is anchored at (AMLL
   /// `alignPosition`; 0.35 mobile top-third, ~0.42–0.5 to centre it on desktop).
@@ -340,7 +353,7 @@ class _LyricsViewState extends State<LyricsView>
       // select is scoped to this branch and never re-runs build() otherwise.
       final int activeIndex = context.select<PlayerProvider, int>(
           (PlayerProvider p) => p.activeLyricIndex);
-      return _StaticLyrics(
+      Widget list = _StaticLyrics(
         lines: _lines,
         activeIndex: activeIndex,
         mainStyle: _mainStyle,
@@ -348,6 +361,33 @@ class _LyricsViewState extends State<LyricsView>
         padding: widget.padding,
         onSeek: _seekToLine,
       );
+      // The accessibility fallback keeps the classic whole-view mask: nothing
+      // here animates per vsync (it repaints only during the short scroll
+      // ease), so the full-box saveLayer is paid a handful of frames at a
+      // time, not continuously like the animated path it was removed from.
+      if (widget.fadeTopFraction > 0 || widget.fadeBottomFraction > 0) {
+        list = ShaderMask(
+          shaderCallback: (Rect bounds) => LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: const <Color>[
+              Colors.transparent,
+              Colors.white,
+              Colors.white,
+              Colors.transparent,
+            ],
+            stops: <double>[
+              0.0,
+              widget.fadeTopFraction,
+              1.0 - widget.fadeBottomFraction,
+              1.0,
+            ],
+          ).createShader(bounds),
+          blendMode: BlendMode.dstIn,
+          child: list,
+        );
+      }
+      return list;
     }
     // Interlude-dot colour — changes per song, not per tick. Passed down instead
     // of the whole provider so the animated subtree carries no live dependency.
@@ -395,11 +435,17 @@ class _LyricsViewState extends State<LyricsView>
                         _controller.renderLines;
                     final int active = _controller.activeIndex;
                     final int singing = _controller.singingIndex;
+                    final double topFadePx =
+                        size.height * widget.fadeTopFraction;
+                    final double bottomFadePx =
+                        size.height * widget.fadeBottomFraction;
                     return Stack(
                       children: <Widget>[
-                        ..._lineWidgets(renders, singing, size.height),
+                        ..._lineWidgets(renders, singing, size.height,
+                            topFadePx, bottomFadePx),
                         if (widget.showInterludeDots)
-                          ..._interlude(active, accent),
+                          ..._interlude(active, accent, size.height, topFadePx,
+                              bottomFadePx),
                       ],
                     );
                   },
@@ -416,11 +462,22 @@ class _LyricsViewState extends State<LyricsView>
     List<LyricLineRender> renders,
     int singing,
     double viewportHeight,
+    double topFadePx,
+    double bottomFadePx,
   ) {
     const double margin = 320;
     final double timeMs = _controller.currentTimeMs;
     final int n =
         renders.length < _lines.length ? renders.length : _lines.length;
+    final bool fadeActive = topFadePx > 0 || bottomFadePx > 0;
+    // How far a line's PAINT can escape its layout box: the word-glow halo
+    // (blur radius ≤ 0.75em → visible tail ≈ 1.3em), the distance-blur's decal
+    // tail (3σ ≤ 36px at the 12px cap), the float rise (≤ 0.18em) and the
+    // white edge ring (≤ 0.3em radius) — 1.5em + 40px covers them all. Used by
+    // [LineEdgeFade] both to test band intersection and to inflate its mask
+    // rect so overflowing pixels keep being faded exactly like under the old
+    // whole-view mask.
+    final double fadeMargin = (_resolvedMainFontSize ?? 30) * 1.5 + 40;
     final List<Widget> out = <Widget>[];
     for (int i = 0; i < n; i++) {
       final double top = renders[i].y;
@@ -469,7 +526,22 @@ class _LyricsViewState extends State<LyricsView>
           top: top,
           left: _padL,
           right: _padR,
-          child: child,
+          // The edge-fade shell is ALWAYS present when the view has a fade (so
+          // the element tree never reshapes and cached line subtrees are never
+          // re-inflated by a band crossing); its render object paints straight
+          // through — zero layers — whenever the line is fully inside the
+          // opaque middle, and pushes a line-sized dstIn mask only while the
+          // line actually reaches a band.
+          child: fadeActive
+              ? LineEdgeFade(
+                  lineTop: top,
+                  viewHeight: viewportHeight,
+                  topFadePx: topFadePx,
+                  bottomFadePx: bottomFadePx,
+                  overflowMargin: fadeMargin,
+                  child: child,
+                )
+              : child,
         ),
       );
     }
@@ -545,7 +617,13 @@ class _LyricsViewState extends State<LyricsView>
     return dy < renders.first.y ? 0 : renders.length - 1;
   }
 
-  List<Widget> _interlude(int active, Color accent) {
+  List<Widget> _interlude(
+    int active,
+    Color accent,
+    double viewportHeight,
+    double topFadePx,
+    double bottomFadePx,
+  ) {
     final List<LyricLineRender> renders = _controller.renderLines;
     if (_lines.isEmpty || renders.isEmpty) return const <Widget>[];
 
@@ -557,6 +635,9 @@ class _LyricsViewState extends State<LyricsView>
         accent: accent,
         yNext: renders.first.y,
         keyIndex: -1,
+        viewportHeight: viewportHeight,
+        topFadePx: topFadePx,
+        bottomFadePx: bottomFadePx,
       );
     }
 
@@ -576,6 +657,9 @@ class _LyricsViewState extends State<LyricsView>
       accent: accent,
       yNext: renders[active + 1].y,
       keyIndex: active,
+      viewportHeight: viewportHeight,
+      topFadePx: topFadePx,
+      bottomFadePx: bottomFadePx,
     );
   }
 
@@ -584,6 +668,9 @@ class _LyricsViewState extends State<LyricsView>
     required Color accent,
     required double yNext,
     required int keyIndex,
+    required double viewportHeight,
+    required double topFadePx,
+    required double bottomFadePx,
   }) {
     const double gapHeight = _lineVPadding * 2;
     const double minMargin = 9;
@@ -591,16 +678,29 @@ class _LyricsViewState extends State<LyricsView>
         (gapHeight - minMargin * 2).clamp(6.0, 12.0).toDouble();
     final double top = (yNext - gapHeight) + (gapHeight - dotsHeight) / 2;
 
+    // The dots rode the old whole-view mask too (they can enter a band while
+    // the user browses), so they get the same per-widget fade shell. They
+    // paint inside their own box — a token overflow margin suffices.
+    final Widget dots = InterludeDots(
+      key: ValueKey<int>(keyIndex),
+      gapDuration: gap,
+      color: accent,
+      dotSize: dotsHeight,
+    );
     return <Widget>[
       Positioned(
         top: top,
         left: _padL,
-        child: InterludeDots(
-          key: ValueKey<int>(keyIndex),
-          gapDuration: gap,
-          color: accent,
-          dotSize: dotsHeight,
-        ),
+        child: topFadePx > 0 || bottomFadePx > 0
+            ? LineEdgeFade(
+                lineTop: top,
+                viewHeight: viewportHeight,
+                topFadePx: topFadePx,
+                bottomFadePx: bottomFadePx,
+                overflowMargin: 8,
+                child: dots,
+              )
+            : dots,
       ),
     ];
   }

@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../../models/local_playlist.dart';
 import '../../models/playlist.dart';
 import '../../models/song.dart';
+import '../../shell/window_drag_region.dart';
 import '../../state/library_provider.dart';
 import '../../state/local_playlist_provider.dart';
 import '../../state/player_provider.dart';
@@ -49,6 +50,16 @@ class LocalPlaylistDetailPage extends StatelessWidget {
                 : (pl == null
                     ? const _Missing()
                     : _LocalBody(playlist: pl)),
+          ),
+          // Window-drag band over the header's top edge, exactly like the
+          // playlist page: top strip only, stacked UNDER the back button so the
+          // button wins hit-testing; fullscreen-guarded by [WindowDragRegion].
+          const Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 48,
+            child: WindowDragRegion(),
           ),
           // Floating back button overlaid on the header's top-left, exactly like
           // the playlist page — no separate solid header strip.

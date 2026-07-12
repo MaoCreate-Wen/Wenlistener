@@ -156,7 +156,7 @@ class KaraokeText extends StatelessWidget {
         _wordsWrap(_WordPass.text, fontSize, floatEm, lastIndex);
 
     // The GLOW pass exists ONLY to composite emphasised words' pure-white auras
-    // additively — one unbounded `saveLayer(BlendMode.plus)` for the whole line
+    // additively — a line-sized, isolated `saveLayer(BlendMode.plus)` pair
     // (`_AdditiveLayer`). That offscreen buffer is the single most expensive op
     // per karaoke frame, so we only pay for it on frames where some word ACTUALLY
     // has a live aura right now. Most singing frames have none (short syllables
@@ -176,6 +176,7 @@ class KaraokeText extends StatelessWidget {
       clipBehavior: Clip.none,
       children: <Widget>[
         _AdditiveLayer(
+          fontSize: fontSize,
           child: _wordsWrap(_WordPass.glow, fontSize, floatEm, lastIndex),
         ),
         textPass,
@@ -524,26 +525,66 @@ enum _WordPass { text, glow }
 /// Composites its [child] as ONE additive (`BlendMode.plus`) layer. Flutter text
 /// `Shadow`s have no per-glyph blend mode (AMLL gets its merged word halo from
 /// `mix-blend-mode: plus-lighter` on the lyric container), so the whole line's
-/// per-character pure-white glow halos are drawn into a single unclipped layer
-/// here and added together — letting adjacent glyphs' halos overlap and MERGE
-/// into a continuous word/phrase halo instead of reading as isolated per-glyph
-/// blobs.
+/// per-character pure-white glow halos are drawn into a single layer here and
+/// added together — letting adjacent glyphs' halos overlap and MERGE into a
+/// continuous word/phrase halo instead of reading as isolated per-glyph blobs.
+///
+/// [fontSize] sizes the layers: they are BOUNDED to the line box inflated by
+/// 1.5em — the widest bloom is a 0.75em blur radius (σ ≈ 0.43em, tail gone
+/// well before 1.5em), so nothing visible is clipped, while the old `null`
+/// bounds made Skia allocate the offscreen at the CLIP size (the whole lyric
+/// view) on every glow frame.
+///
+/// The plus layer sits inside an extra plain (srcOver) isolation layer so the
+/// additive merge always happens against TRANSPARENT and the result is then
+/// alpha-composited over whatever is beneath. That is exactly what the old
+/// page-level edge-fade `ShaderMask` offscreen provided implicitly; with that
+/// full-window layer gone, an un-isolated `plus` would add straight onto the
+/// live mesh background (`mesh + glow` instead of `glow + mesh·(1-α)`) and
+/// visibly brighten every halo over bright art. Costs one extra line-sized
+/// saveLayer, ONLY on frames where a word actually glows.
 class _AdditiveLayer extends SingleChildRenderObjectWidget {
-  const _AdditiveLayer({required Widget child}) : super(child: child);
+  const _AdditiveLayer({required this.fontSize, required Widget child})
+      : super(child: child);
+
+  /// The line's main font size in px — the em basis for the layer bounds.
+  final double fontSize;
 
   @override
   _RenderAdditiveLayer createRenderObject(BuildContext context) =>
-      _RenderAdditiveLayer();
+      _RenderAdditiveLayer(fontSize);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderAdditiveLayer renderObject,
+  ) {
+    renderObject.fontSize = fontSize;
+  }
 }
 
 class _RenderAdditiveLayer extends RenderProxyBox {
+  _RenderAdditiveLayer(this._fontSize);
+
+  double _fontSize;
+  set fontSize(double value) {
+    if (value == _fontSize) return;
+    _fontSize = value;
+    markNeedsPaint();
+  }
+
   @override
   void paint(PaintingContext context, Offset offset) {
     if (child == null) return;
-    // bounds = null so the layer is never clipped — the bloom must extend well
-    // past each glyph box (up to ~0.3em blur) to bridge and merge across glyphs.
-    context.canvas.saveLayer(null, Paint()..blendMode = BlendMode.plus);
+    final Rect bounds = (offset & size).inflate(_fontSize * 1.5);
+    final Canvas canvas = context.canvas;
+    // Isolation first (srcOver), then the additive merge inside it — see the
+    // widget doc: `plus` must resolve against transparent, then composite
+    // normally, to render the same pixels the page-offscreen era did.
+    canvas.saveLayer(bounds, Paint());
+    canvas.saveLayer(bounds, Paint()..blendMode = BlendMode.plus);
     super.paint(context, offset);
-    context.canvas.restore();
+    canvas.restore();
+    canvas.restore();
   }
 }

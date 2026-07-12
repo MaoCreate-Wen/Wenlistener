@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../../models/local_playlist.dart';
 import '../../models/playlist.dart';
 import '../../models/song.dart';
+import '../../shell/window_drag_region.dart';
 import '../../state/library_provider.dart';
 import '../../state/local_playlist_provider.dart';
 import '../../state/player_provider.dart';
@@ -79,6 +80,17 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
                 return _PlaylistBody(playlist: snap.data!);
               },
             ),
+          ),
+          // Window-drag band over the header's top edge (this route covers the
+          // shell, so its drag bar is unreachable): drag-to-move + double-click
+          // maximize, fullscreen-guarded. NOT full-height — just the top strip —
+          // and stacked UNDER the back button so the button wins hit-testing.
+          const Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 48,
+            child: WindowDragRegion(),
           ),
           // Floating back button, overlaid on the blurred-cover header's top-left
           // corner so it reads as part of the page — no separate solid header

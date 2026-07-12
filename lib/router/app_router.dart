@@ -12,6 +12,7 @@ import '../pages/playlist/playlist_detail_page.dart';
 import '../pages/search/search_page.dart';
 import '../shell/app_shell.dart';
 import '../state/player_provider.dart';
+import '../widgets/artwork_image.dart';
 import 'routes.dart';
 
 /// Desktop route table.
@@ -175,15 +176,28 @@ class _MeshPrewarmer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Rebuilds only when the artwork URL changes (field-level select). The
-    // actual work is deferred to after the frame so build stays pure; prewarm
-    // itself dedupes cache hits and in-flight builds.
+    // Rebuilds only when the artwork URL changes (field-level select) or the
+    // window size does (MediaQuery.sizeOf). The actual work is deferred to
+    // after the frame so build stays pure; prewarm itself dedupes cache hits
+    // and in-flight builds, and precacheImage is a no-op map hit once decoded.
     final String? url = context
         .select<PlayerProvider, String?>((p) => p.currentSong?.artworkUrl);
     if (url != null && url.isNotEmpty) {
       final List<Color> colors = context.read<PlayerProvider>().paletteColors;
+      // The `/player` Hero-flight rider: decode the cover at its DESTINATION
+      // display resolution ahead of the push. The flight shuttle and the
+      // settled `_Cover` resolve this exact ResizeImage key (same formula +
+      // 64px bucketing in [ArtworkImage.cachePxFor]), so the 420ms flight
+      // never kicks off a full cover decode mid-transition — that decode was
+      // the black skeleton visibly flying on every first open.
+      final int coverPx = ArtworkImage.cachePxFor(
+        PlayerPage.coverSizeFor(MediaQuery.sizeOf(context)),
+        MediaQuery.devicePixelRatioOf(context),
+      );
       WidgetsBinding.instance.addPostFrameCallback((_) {
         NeonFlowBackground.prewarm(url, colors);
+        if (!context.mounted) return;
+        precacheImage(ArtworkImage.providerFor(url, coverPx), context);
       });
     }
     return child;

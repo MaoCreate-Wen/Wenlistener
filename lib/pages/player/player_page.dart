@@ -11,6 +11,7 @@ import '../../models/local_playlist.dart';
 import '../../models/playlist.dart';
 import '../../models/song.dart';
 import '../../router/routes.dart';
+import '../../shell/window_drag_region.dart';
 import '../../state/library_provider.dart';
 import '../../state/local_playlist_provider.dart';
 import '../../state/player_provider.dart';
@@ -41,6 +42,27 @@ import 'widgets/toggle_icon_button.dart';
 class PlayerPage extends StatefulWidget {
   const PlayerPage({super.key});
 
+  /// Shell-visible lyric-surface signal: `true` while a mounted [PlayerPage]
+  /// is actually SHOWING its lyric pane (a song is loaded and the bottom-bar
+  /// lyrics toggle hasn't collapsed it). The window buttons live ABOVE the
+  /// Router (in the `MaterialApp.router` `builder:` frame), so this page-
+  /// internal state is bridged to them through a static [ValueNotifier] —
+  /// `WindowButtons` combines it with the current route (`/player`) to decide
+  /// when its auto-fade may run. Maintained by [_PlayerPageState] (published
+  /// post-frame from `build`, reset on `dispose`).
+  static final ValueNotifier<bool> lyricSurfaceActive =
+      ValueNotifier<bool>(false);
+
+  /// AMLL cover size for a given window (logical) size: `min(50vh, 38vw)`,
+  /// `min(45vh, 38vw)` when height ≤ 1000, clamped 160–560. Shared between
+  /// [_InfoColumn] (the real layout) and the shell prewarmer, which precaches
+  /// the cover at exactly this display size so the mini→player Hero flight
+  /// never decodes mid-flight.
+  static double coverSizeFor(Size window) {
+    final double vh = window.height <= 1000 ? 0.45 : 0.50;
+    return math.min(vh * window.height, 0.38 * window.width).clamp(160.0, 560.0);
+  }
+
   @override
   State<PlayerPage> createState() => _PlayerPageState();
 }
@@ -49,6 +71,89 @@ class _PlayerPageState extends State<PlayerPage> {
   // AMLL `hideLyricViewAtom`: the bottom lyrics toggle collapses the right pane
   // and lets the info column take the whole width.
   bool _hideLyric = false;
+
+  // Entrance gate for the HEAVY lyric pane (suspect-c of the Hero-flight jank):
+  // [LyricsView]'s first build TextPainter-measures every line (and every word
+  // of word-by-word lines) and then rebuilds the singing line every vsync —
+  // doing all of that DURING the 420ms push transition starved the flight down
+  // to ~6–10 present/s. The pane now mounts only after the route's entrance
+  // animation completes and fades in over 240ms (the page-level FadeTransition
+  // has just reached 1.0, so this reads as the tail of the same entrance —
+  // no pop-in). Pop direction is untouched: the pane is long-mounted by then.
+  bool _entranceDone = false;
+  Animation<double>? _entranceAnim;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_entranceDone || _entranceAnim != null) return;
+    final Animation<double>? anim = ModalRoute.of(context)?.animation;
+    if (anim == null) {
+      _entranceDone = true;
+      return;
+    }
+    // ALWAYS arm the listener — the initial status cannot be trusted. On this
+    // go_router push path the route's controller reads `completed`/value 1.0
+    // during the page's very first build and only rewinds to `forward`/0.0
+    // later in the same frame (measured on the release build: didChange sees
+    // completed@1.0, the first post-frame sees forward@0.0). Deciding "no
+    // entrance" from that first reading disarms the gate on exactly the
+    // flight it exists for. Instead, confirm at the first post-frame: if the
+    // route is STILL `completed` there really is no entrance transition
+    // (e.g. a no-animation restore) and the pane mounts immediately.
+    _entranceAnim = anim;
+    anim.addStatusListener(_onEntranceStatus);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _entranceDone || _entranceAnim == null) return;
+      if (_entranceAnim!.status == AnimationStatus.completed) {
+        _detachEntranceListener();
+        setState(() => _entranceDone = true);
+      }
+    });
+  }
+
+  void _onEntranceStatus(AnimationStatus status) {
+    if (status != AnimationStatus.completed) return;
+    _detachEntranceListener();
+    if (mounted) setState(() => _entranceDone = true);
+  }
+
+  void _detachEntranceListener() {
+    _entranceAnim?.removeStatusListener(_onEntranceStatus);
+    _entranceAnim = null;
+  }
+
+  @override
+  void dispose() {
+    _detachEntranceListener();
+    // The page owns the shell-facing surface signal — clear it when the route
+    // is disposed. Post-frame: dispose can run inside the frame's tree
+    // finalization, and flipping the notifier synchronously there would
+    // markNeedsBuild the shell-level WindowButtons mid-pipeline. (Route
+    // changes already restore the buttons via the router listener; this is
+    // the belt-and-braces reset for the notifier itself.)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      PlayerPage.lyricSurfaceActive.value = false;
+    });
+    super.dispose();
+  }
+
+  /// Publishes "the lyric pane is on screen" to [PlayerPage.lyricSurfaceActive].
+  /// Called from `build` (the single place that knows both `hasSong` and
+  /// `_hideLyric`), so the write is deferred to post-frame — the shell's
+  /// WindowButtons listens to this notifier, and notifying synchronously
+  /// during this page's build would call `setState` on a widget that has
+  /// already built this frame.
+  bool _publishedSurface = false;
+  void _publishLyricSurface(bool active) {
+    if (_publishedSurface == active) return;
+    _publishedSurface = active;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Reads the field (not the captured arg) so if several rebuilds land in
+      // one frame the LAST computed state wins.
+      if (mounted) PlayerPage.lyricSurfaceActive.value = _publishedSurface;
+    });
+  }
 
   void _dismiss() {
     if (context.canPop()) {
@@ -62,6 +167,7 @@ class _PlayerPageState extends State<PlayerPage> {
   Widget build(BuildContext context) {
     final bool hasSong =
         context.select<PlayerProvider, bool>((PlayerProvider p) => p.hasSong);
+    _publishLyricSurface(hasSong && !_hideLyric);
 
     return Scaffold(
       backgroundColor: AppColors.bg,
@@ -76,7 +182,10 @@ class _PlayerPageState extends State<PlayerPage> {
                   _Grabber(onTap: _dismiss),
                   Expanded(
                     child: hasSong
-                        ? _TwoPaneBody(hideLyric: _hideLyric)
+                        ? _TwoPaneBody(
+                            hideLyric: _hideLyric,
+                            lyricsReady: _entranceDone,
+                          )
                         : const _EmptyBody(),
                   ),
                   // AMLL `horizontalBottomControls`: a dedicated full-width row
@@ -145,6 +254,12 @@ class _Background extends StatelessWidget {
 }
 
 /// Top-centre pull handle. Tap dismisses the sheet.
+///
+/// The strip's EMPTY area doubles as the page's window-drag region (this route
+/// covers the shell, so the top bar's drag middle is unreachable): a
+/// [WindowDragRegion] fills the strip UNDER the pill, giving drag-to-move +
+/// double-click maximize, fullscreen-guarded. The pill sits ON TOP with an
+/// opaque hit test, so its taps never reach the strip — close always wins.
 class _Grabber extends StatelessWidget {
   final VoidCallback onTap;
   const _Grabber({required this.onTap});
@@ -153,23 +268,29 @@ class _Grabber extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       height: 34,
-      child: Center(
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: onTap,
-            child: Container(
-              width: 42,
-              height: 5,
-              margin: const EdgeInsets.only(top: 12),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.35),
-                borderRadius: BorderRadius.circular(3),
+      child: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          const WindowDragRegion(),
+          Center(
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onTap,
+                child: Container(
+                  width: 42,
+                  height: 5,
+                  margin: const EdgeInsets.only(top: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.35),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -183,7 +304,13 @@ class _Grabber extends StatelessWidget {
 class _TwoPaneBody extends StatefulWidget {
   final bool hideLyric;
 
-  const _TwoPaneBody({required this.hideLyric});
+  /// False only while the route's entrance animation is still running — the
+  /// lyric pane's slot stays empty (the mesh shows through, exactly what the
+  /// fading-in page looked like anyway) and the pane mounts + fades in once
+  /// the flight has settled. See [_PlayerPageState._entranceDone].
+  final bool lyricsReady;
+
+  const _TwoPaneBody({required this.hideLyric, required this.lyricsReady});
 
   @override
   State<_TwoPaneBody> createState() => _TwoPaneBodyState();
@@ -271,8 +398,21 @@ class _TwoPaneBodyState extends State<_TwoPaneBody> {
                                   .transform((1 - hide).clamp(0.0, 1.0)),
                               child: SizedBox(
                                 width: lyricFullW,
-                                child: _LyricsPane(
-                                    alignPosition: _alignPosition),
+                                // Entrance defer: AnimatedOpacity animates only
+                                // when `lyricsReady` FLIPS (the one moment the
+                                // pane mounts post-flight); on every later
+                                // rebuild / lyric-toggle remount it is a
+                                // constant 1.0, so the AMLL 0.5s/0.25s toggle
+                                // motion above is untouched.
+                                child: AnimatedOpacity(
+                                  opacity: widget.lyricsReady ? 1.0 : 0.0,
+                                  duration: const Duration(milliseconds: 240),
+                                  curve: Curves.easeOut,
+                                  child: widget.lyricsReady
+                                      ? _LyricsPane(
+                                          alignPosition: _alignPosition)
+                                      : const SizedBox.expand(),
+                                ),
                               ),
                             ),
                           ),
@@ -306,9 +446,9 @@ class _InfoColumn extends StatelessWidget {
         // AMLL: cover = min(50vh, 38vw); min(45vh, 38vw) when height <= 1000.
         // Keyed off the WINDOW (viewport) so the whole cluster grows on a
         // maximized/fullscreen window — no 460 cap that pins it small.
-        final double vh = media.height <= 1000 ? 0.45 : 0.50;
-        final double coverSize =
-            math.min(vh * media.height, 0.38 * media.width).clamp(160.0, 560.0);
+        // Formula lives on [PlayerPage.coverSizeFor] so the shell prewarmer can
+        // precache the cover at exactly this display size.
+        final double coverSize = PlayerPage.coverSizeFor(media);
 
         // Cover-scaled rhythm (spec §1.4): fixed em-like gaps tied to the cover
         // instead of `space-between` free space, so the four rows stay a TIGHT
@@ -935,25 +1075,17 @@ class _LyricsPane extends StatelessWidget {
         // AMLL `.lyric { padding-right: 15% }` (8% on narrow/short windows).
         final bool tight = c.maxWidth <= 1600 || c.maxHeight <= 1000;
         final double padRight = c.maxWidth * (tight ? 0.08 : 0.15);
-        return ShaderMask(
-          shaderCallback: (Rect bounds) => const LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: <Color>[
-              Colors.transparent,
-              Colors.white,
-              Colors.white,
-              Colors.transparent,
-            ],
-            stops: <double>[0.0, 0.10, 0.90, 1.0],
-          ).createShader(bounds),
-          blendMode: BlendMode.dstIn,
-          child: Padding(
-            padding: EdgeInsets.only(right: padRight),
-            child: LyricsView(
-              padding: const EdgeInsets.symmetric(horizontal: AppDimens.space24),
-              alignPosition: alignPosition,
-            ),
+        // Edge dissolve is delegated to LyricsView's per-line LineEdgeFade
+        // (fadeTop/BottomFraction) instead of a pane-sized ShaderMask — that
+        // mask forced a near-full-window saveLayer EVERY frame the lyrics
+        // animate, and it was the last such layer on this surface.
+        return Padding(
+          padding: EdgeInsets.only(right: padRight),
+          child: LyricsView(
+            padding: const EdgeInsets.symmetric(horizontal: AppDimens.space24),
+            alignPosition: alignPosition,
+            fadeTopFraction: 0.10,
+            fadeBottomFraction: 0.10,
           ),
         );
       },

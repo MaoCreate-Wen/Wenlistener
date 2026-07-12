@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
-import 'package:window_manager/window_manager.dart';
 
 import '../pages/settings/settings_dialog.dart';
 import '../router/routes.dart';
@@ -12,6 +11,7 @@ import '../theme/app_typography.dart';
 import 'fullscreen_controller.dart';
 import 'nav_history.dart';
 import 'window_buttons.dart';
+import 'window_drag_region.dart';
 
 /// Height of the persistent desktop top bar (roomier than the old 38px title bar
 /// to seat the search pill).
@@ -28,9 +28,16 @@ void submitTopBarSearch(BuildContext context, String kw) {
 
 /// The persistent top bar mounted above the content area in [AppShell]: ◀ ▶
 /// browser-style history arrows, a global search pill, a draggable middle, and on
-/// the right a 设置 (settings) button + window controls. Persists across every
-/// shell branch so history + search + settings are always reachable. (Login /
-/// 账号 now live inside the settings dialog, so the old avatar dropdown is gone.)
+/// the right a 设置 (settings) button. Persists across every shell branch so
+/// history + search + settings are always reachable. (Login / 账号 now live
+/// inside the settings dialog, so the old avatar dropdown is gone.)
+///
+/// The window controls are NOT part of this bar anymore — [WindowButtons] is
+/// hosted once by `DesktopWindowFrame` in an overlay pinned top-right above
+/// every route (so pushed full-screen surfaces get them too). This bar only
+/// reserves the overlay's exact footprint ([WindowButtons.totalWidth]) so the
+/// settings button never slides under it; the spacer collapses in 沉浸全屏,
+/// exactly like the overlay buttons themselves.
 class DesktopTopBar extends StatelessWidget {
   final TextEditingController searchController;
   final FocusNode searchFocus;
@@ -65,16 +72,10 @@ class DesktopTopBar extends StatelessWidget {
             controller: searchController,
             focusNode: searchFocus,
           ),
-          // Draggable middle — disabled during 沉浸全屏 (no window to move; a
-          // startDragging on a fullscreen window would pop it out of state).
-          Expanded(
-            child: ValueListenableBuilder<bool>(
-              valueListenable: FullscreenController.isFullscreen,
-              builder: (BuildContext context, bool fullscreen, _) => fullscreen
-                  ? const SizedBox.expand()
-                  : const DragToMoveArea(child: SizedBox.expand()),
-            ),
-          ),
+          // Draggable middle — the shared [WindowDragRegion] disables itself
+          // during 沉浸全屏 (no window to move; a startDragging on a fullscreen
+          // window would pop it out of state).
+          const Expanded(child: WindowDragRegion()),
           _NavArrow(
             icon: Icons.settings_rounded,
             tooltip: '设置',
@@ -82,7 +83,14 @@ class DesktopTopBar extends StatelessWidget {
             onTap: () => showSettingsDialog(context),
           ),
           const SizedBox(width: AppDimens.space8),
-          const WindowButtons(height: kTopBarHeight),
+          // Footprint of the overlay-hosted WindowButtons (DesktopWindowFrame),
+          // collapsing in fullscreen exactly as the overlay does.
+          ValueListenableBuilder<bool>(
+            valueListenable: FullscreenController.isFullscreen,
+            builder: (BuildContext context, bool fullscreen, _) => SizedBox(
+              width: fullscreen ? 0 : WindowButtons.totalWidth,
+            ),
+          ),
         ],
       ),
     );

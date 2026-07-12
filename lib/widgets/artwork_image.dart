@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' show lerpDouble;
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -57,6 +58,34 @@ class ArtworkImage extends StatelessWidget {
   static RectTween _rectTween(Rect? begin, Rect? end) =>
       RectTween(begin: begin, end: end);
 
+  /// Decode-cache dimension for a cover displayed at [logicalSize].
+  ///
+  /// Small art (thumbnails, grid cards, ≤256px) decodes at its exact display
+  /// resolution — the mobile memory lesson (a grid of full-res decodes balloons
+  /// memory) unchanged. LARGE covers bucket up to the next 64px step so the
+  /// Hero flight shuttle, the destination `/player` cover and the
+  /// [_MeshPrewarmer]-style precache all resolve the SAME [ResizeImage] cache
+  /// key (equal width/height ⇒ equal key ⇒ one decode) even as window resizes
+  /// nudge the ideal size by a few pixels. Decoding ≤63px above display size
+  /// then minifying is visually identical; sharing the key is what kills the
+  /// mid-flight re-decode churn.
+  static int cachePxFor(double logicalSize, double devicePixelRatio) {
+    final int px = (logicalSize * devicePixelRatio).round().clamp(64, 640);
+    if (px <= 256) return px;
+    return math.min(((px + 63) ~/ 64) * 64, 640);
+  }
+
+  /// The exact provider an [ArtworkImage] of this url/decode-size resolves —
+  /// exposed so callers can [precacheImage] the DESTINATION resolution before a
+  /// Hero flight (equal construction ⇒ equal cache key ⇒ the flight and the
+  /// settled cover paint from the already-decoded texture).
+  static ImageProvider providerFor(String url, int cachePx) =>
+      ResizeImage.resizeIfNeeded(
+        cachePx,
+        cachePx,
+        CachedNetworkImageProvider(url, headers: kNeteaseImageHeaders),
+      );
+
   static Widget _shuttle(
     BuildContext flightContext,
     Animation<double> animation,
@@ -71,6 +100,14 @@ class ArtworkImage extends StatelessWidget {
     }
     final _ArtworkHeroChild a = fromChild;
     final _ArtworkHeroChild b = toChild;
+    // The in-flight image decodes at the LARGER endpoint's resolution — on push
+    // that is exactly the destination cover's provider (precached by the shell's
+    // prewarmer), on pop it is the big cover's provider that is still in the
+    // image cache from the open. Either way the flight resolves an
+    // ALREADY-DECODED texture; the old fixed 512·dpr flight size was a third
+    // cache key no end state ever used, so every first open decoded a full
+    // cover MID-FLIGHT (the shuttle visibly flew an empty skeleton).
+    final double flightSize = math.max(a.size, b.size);
     return RepaintBoundary(
       child: AnimatedBuilder(
         animation: animation,
@@ -86,7 +123,7 @@ class ArtworkImage extends StatelessWidget {
                 ];
           return _ArtworkHeroChild(
             url: b.url,
-            size: b.size,
+            size: flightSize,
             resolvedRadius: r,
             fit: b.fit,
             shadow: sh,
@@ -120,15 +157,13 @@ class _ArtworkHeroChild extends StatelessWidget {
     final bool hasUrl = url != null && url!.isNotEmpty;
     // Decode covers at DISPLAY size, not their native ~1000px — netease covers are large and a
     // grid of full-res decodes balloons memory (each 1000² RGBA ≈ 4 MB). Cap the decode dimension.
+    // The Hero flight passes the larger endpoint's size here, so the in-flight
+    // provider is cache-identical to that endpoint's (no mid-flight decode).
     final double dpr = MediaQuery.devicePixelRatioOf(context);
-    final int cachePx = ((expand ? 512.0 : size) * dpr).round().clamp(64, 640);
+    final int cachePx = ArtworkImage.cachePxFor(size, dpr);
     final Widget inner = hasUrl
         ? Image(
-            image: ResizeImage.resizeIfNeeded(
-              cachePx,
-              cachePx,
-              CachedNetworkImageProvider(url!, headers: kNeteaseImageHeaders),
-            ),
+            image: ArtworkImage.providerFor(url!, cachePx),
             fit: fit,
             width: expand ? null : size,
             height: expand ? null : size,

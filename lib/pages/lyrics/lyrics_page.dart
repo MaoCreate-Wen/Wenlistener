@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../animation/neon_flow_background.dart';
 import '../../router/routes.dart';
 import '../../services/fft_service.dart';
+import '../../shell/window_drag_region.dart';
 import '../../state/player_provider.dart';
 import '../../state/settings_provider.dart';
 import '../../theme/app_colors.dart';
@@ -173,42 +174,44 @@ class _Header extends StatelessWidget {
 }
 
 /// The full-bleed lyric column, larger than the two-pane variant and centred.
+///
+/// The top/bottom edge dissolve used to be a page-wide `ShaderMask(dstIn)`
+/// around this whole subtree — one full-WINDOW `saveLayer` re-composited every
+/// animated frame, the page's single biggest constant raster cost. It is now
+/// [LyricsView]'s built-in per-line fade (`fadeTop/BottomFraction`, same
+/// gradient stops): only the few lines whose pixels actually reach the 14%
+/// bands go through a LINE-sized mask layer (see `LineEdgeFade`), everything
+/// else paints layer-free. Visually identical; the full-window offscreen is
+/// gone.
 class _MaximizedLyrics extends StatelessWidget {
   const _MaximizedLyrics();
 
   @override
   Widget build(BuildContext context) {
-    return ShaderMask(
-      shaderCallback: (Rect bounds) => const LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: <Color>[
-          Colors.transparent,
-          Colors.white,
-          Colors.white,
-          Colors.transparent,
-        ],
-        stops: <double>[0.0, 0.14, 0.86, 1.0],
-      ).createShader(bounds),
-      blendMode: BlendMode.dstIn,
-      child: LayoutBuilder(
-        builder: (BuildContext context, BoxConstraints c) {
-          // Constrain the lyric column so long lines stay readable on very wide
-          // windows; centre it horizontally.
-          final double maxW = c.maxWidth.clamp(0.0, 900.0);
-          final double sidePad = (c.maxWidth - maxW) / 2 + AppDimens.space48;
-          return LyricsView(
-            padding: EdgeInsets.symmetric(horizontal: sidePad),
-            alignPosition: 0.44,
-            mainStyle: LyricsView.defaultMainStyle.copyWith(fontSize: 34),
-          );
-        },
-      ),
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints c) {
+        // Constrain the lyric column so long lines stay readable on very wide
+        // windows; centre it horizontally.
+        final double maxW = c.maxWidth.clamp(0.0, 900.0);
+        final double sidePad = (c.maxWidth - maxW) / 2 + AppDimens.space48;
+        return LyricsView(
+          padding: EdgeInsets.symmetric(horizontal: sidePad),
+          alignPosition: 0.44,
+          mainStyle: LyricsView.defaultMainStyle.copyWith(fontSize: 34),
+          fadeTopFraction: 0.14,
+          fadeBottomFraction: 0.14,
+        );
+      },
     );
   }
 }
 
 /// Top-centre pull handle. Tap dismisses the sheet.
+///
+/// As on the player page, the strip's EMPTY area is the route's window-drag
+/// region: a [WindowDragRegion] (drag-to-move + double-click maximize,
+/// fullscreen-guarded) fills the strip UNDER the pill, whose opaque hit test
+/// keeps the close tap winning over the strip.
 class _Grabber extends StatelessWidget {
   final VoidCallback onTap;
   const _Grabber({required this.onTap});
@@ -217,23 +220,29 @@ class _Grabber extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       height: 34,
-      child: Center(
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: onTap,
-            child: Container(
-              width: 42,
-              height: 5,
-              margin: const EdgeInsets.only(top: 12),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.35),
-                borderRadius: BorderRadius.circular(3),
+      child: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          const WindowDragRegion(),
+          Center(
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onTap,
+                child: Container(
+                  width: 42,
+                  height: 5,
+                  margin: const EdgeInsets.only(top: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.35),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
