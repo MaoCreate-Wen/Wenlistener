@@ -157,55 +157,41 @@ class _PlaylistBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return CustomScrollView(
-      slivers: <Widget>[
-        SliverToBoxAdapter(
-          child: _Header(
-            playlist: playlist,
-            onPlayAll: () => _playAll(context),
-            onCollect: () => _collect(context),
-            onImport: () => _importToLocal(context),
-          ),
+    // DkTrackPageBody owns the scroll view + in-playlist search / 定位 wiring;
+    // this page only supplies its header and the play/menu actions. Row taps
+    // receive the ORIGINAL index even while filtered, so the queue is always
+    // the full playlist.
+    return DkTrackPageBody(
+      tracks: playlist.tracks,
+      headerBuilder: (BuildContext ctx, Widget toolbar) => _Header(
+        playlist: playlist,
+        toolbar: toolbar,
+        onPlayAll: () => _playAll(context),
+        onCollect: () => _collect(context),
+        onImport: () => _importToLocal(context),
+      ),
+      onPlayIndex: (int i) => _playAll(context, index: i),
+      onMenu: (Song s, Offset pos) => dkShowSongMenu(context, s, pos),
+      emptyPlaceholder: Padding(
+        padding: const EdgeInsets.only(top: AppDimens.space48),
+        child: Center(
+          child: Text('该歌单没有曲目', style: AppTypography.label),
         ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(
-            AppDimens.space32,
-            AppDimens.space16,
-            AppDimens.space32,
-            AppDimens.space48,
-          ),
-          // DkTrackTable is itself a (virtualized) sliver, so it goes straight
-          // into SliverPadding — only on-screen rows build. Empty state stays a
-          // simple box adapter.
-          sliver: playlist.tracks.isEmpty
-              ? SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: AppDimens.space48),
-                    child: Center(
-                      child: Text('该歌单没有曲目', style: AppTypography.label),
-                    ),
-                  ),
-                )
-              : DkTrackTable(
-                  songs: playlist.tracks,
-                  onPlay: (int i) => _playAll(context, index: i),
-                  onMenu: (Song s, Offset pos) =>
-                      dkShowSongMenu(context, s, pos),
-                ),
-        ),
-      ],
+      ),
     );
   }
 }
 
 class _Header extends StatelessWidget {
   final Playlist playlist;
+  final Widget toolbar;
   final VoidCallback onPlayAll;
   final VoidCallback onCollect;
   final VoidCallback onImport;
 
   const _Header({
     required this.playlist,
+    required this.toolbar,
     required this.onPlayAll,
     required this.onCollect,
     required this.onImport,
@@ -290,6 +276,7 @@ class _Header extends StatelessWidget {
                       Wrap(
                         spacing: AppDimens.space12,
                         runSpacing: AppDimens.space8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         children: <Widget>[
                           DkPrimaryButton(
                             icon: Icons.play_arrow_rounded,
@@ -306,6 +293,7 @@ class _Header extends StatelessWidget {
                             label: '导入到共同歌单',
                             onPressed: onImport,
                           ),
+                          toolbar,
                         ],
                       ),
                     ],

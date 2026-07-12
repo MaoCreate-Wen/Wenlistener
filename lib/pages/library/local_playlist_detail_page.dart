@@ -148,39 +148,28 @@ class _LocalBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return CustomScrollView(
-      slivers: <Widget>[
-        SliverToBoxAdapter(
-          child: _Header(
-            playlist: playlist,
-            onPlayAll: () => _playAll(context),
-            onImport: () => _importLocal(context),
-            onRename: () => _rename(context),
-            onDelete: () => _delete(context),
-          ),
-        ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(
-            AppDimens.space32,
-            AppDimens.space16,
-            AppDimens.space32,
-            AppDimens.space48,
-          ),
-          sliver: playlist.tracks.isEmpty
-              ? SliverToBoxAdapter(child: _EmptyTracks(onImport: () => _importLocal(context)))
-              : DkTrackTable(
-                  songs: playlist.tracks,
-                  onPlay: (int i) => _playAll(context, index: i),
-                  onMenu: (Song s, Offset pos) => dkShowSongMenu(
-                    context,
-                    s,
-                    pos,
-                    onRemove: () =>
-                        context.read<LocalPlaylistProvider>().removeSong(playlist.id, s.id),
-                  ),
-                ),
-        ),
-      ],
+    // DkTrackPageBody owns the scroll view + in-playlist search / 定位 wiring
+    // (identical to the remote playlist page); row taps receive the ORIGINAL
+    // index even while filtered, so the queue is always the full playlist.
+    return DkTrackPageBody(
+      tracks: playlist.tracks,
+      headerBuilder: (BuildContext ctx, Widget toolbar) => _Header(
+        playlist: playlist,
+        toolbar: toolbar,
+        onPlayAll: () => _playAll(context),
+        onImport: () => _importLocal(context),
+        onRename: () => _rename(context),
+        onDelete: () => _delete(context),
+      ),
+      onPlayIndex: (int i) => _playAll(context, index: i),
+      onMenu: (Song s, Offset pos) => dkShowSongMenu(
+        context,
+        s,
+        pos,
+        onRemove: () =>
+            context.read<LocalPlaylistProvider>().removeSong(playlist.id, s.id),
+      ),
+      emptyPlaceholder: _EmptyTracks(onImport: () => _importLocal(context)),
     );
   }
 }
@@ -218,6 +207,7 @@ class _EmptyTracks extends StatelessWidget {
 
 class _Header extends StatelessWidget {
   final LocalPlaylist playlist;
+  final Widget toolbar;
   final VoidCallback onPlayAll;
   final VoidCallback onImport;
   final VoidCallback onRename;
@@ -225,6 +215,7 @@ class _Header extends StatelessWidget {
 
   const _Header({
     required this.playlist,
+    required this.toolbar,
     required this.onPlayAll,
     required this.onImport,
     required this.onRename,
@@ -322,6 +313,7 @@ class _Header extends StatelessWidget {
                             label: '删除',
                             onPressed: onDelete,
                           ),
+                          toolbar,
                         ],
                       ),
                     ],

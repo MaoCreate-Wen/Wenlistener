@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -5,6 +6,9 @@ import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderAbstractViewport;
+import 'package:flutter/services.dart'
+    show KeyDownEvent, KeyEvent, LogicalKeyboardKey;
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
@@ -404,11 +408,17 @@ class DkSectionTitle extends StatelessWidget {
 
 /// A single dense, hover-reactive track row (index · title · artist · album ·
 /// like · duration · ⋯). Right-click / ⋯ opens the shared song menu.
+///
+/// [flashNonce] drives the "定位" flash-highlight: whenever it changes to a
+/// non-zero value (or the row is first built with one), a brief accent-tinted
+/// wash fades out over ~1.2s. `0` (the default) renders the row exactly as
+/// before — hover/active visuals are untouched.
 class DkTrackRow extends StatefulWidget {
   final int index;
   final Song song;
   final bool active;
   final bool showAlbum;
+  final int flashNonce;
   final VoidCallback onPlay;
   final void Function(Offset globalPosition) onMenu;
 
@@ -420,14 +430,43 @@ class DkTrackRow extends StatefulWidget {
     required this.onPlay,
     required this.onMenu,
     this.showAlbum = true,
+    this.flashNonce = 0,
   });
 
   @override
   State<DkTrackRow> createState() => _DkTrackRowState();
 }
 
-class _DkTrackRowState extends State<DkTrackRow> {
+class _DkTrackRowState extends State<DkTrackRow>
+    with SingleTickerProviderStateMixin {
   bool _hover = false;
+
+  late final AnimationController _flash = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    // The row may only be built AFTER the locate-scroll lands on it (rows are
+    // virtualized), so a fresh row created mid-flash must start its own fade.
+    if (widget.flashNonce != 0) _flash.forward(from: 0);
+  }
+
+  @override
+  void didUpdateWidget(DkTrackRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.flashNonce != oldWidget.flashNonce && widget.flashNonce != 0) {
+      _flash.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _flash.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -445,15 +484,30 @@ class _DkTrackRowState extends State<DkTrackRow> {
         onDoubleTap: widget.onPlay,
         onSecondaryTapDown: (TapDownDetails d) =>
             widget.onMenu(d.globalPosition),
-        child: Container(
-          height: 52,
-          padding: const EdgeInsets.symmetric(horizontal: AppDimens.space12),
-          decoration: BoxDecoration(
-            color: widget.active
+        child: AnimatedBuilder(
+          animation: _flash,
+          builder: (BuildContext context, Widget? rowChild) {
+            Color bg = widget.active
                 ? AppColors.rowSelected
-                : (_hover ? AppColors.hover : Colors.transparent),
-            borderRadius: BorderRadius.circular(AppDimens.radiusSm),
-          ),
+                : (_hover ? AppColors.hover : Colors.transparent);
+            if (widget.flashNonce != 0) {
+              final double wash =
+                  (1 - Curves.easeOutCubic.transform(_flash.value)) * 0.30;
+              if (wash > 0) {
+                bg = Color.alphaBlend(accent.withValues(alpha: wash), bg);
+              }
+            }
+            return Container(
+              height: 52,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: AppDimens.space12),
+              decoration: BoxDecoration(
+                color: bg,
+                borderRadius: BorderRadius.circular(AppDimens.radiusSm),
+              ),
+              child: rowChild,
+            );
+          },
           child: Row(
             children: <Widget>[
               SizedBox(
@@ -552,6 +606,9 @@ class _DkTrackRowState extends State<DkTrackRow> {
   }
 }
 
+/// Fixed pixel height of a [DkTrackRow] (== [DkTrackTable]'s `itemExtent`).
+const double kDkTrackRowExtent = 52;
+
 /// Header row + **virtualized** [DkTrackRow] list, exposed as *slivers* (via
 /// [SliverMainAxisGroup]) so it drops straight into the playlist page's
 /// [CustomScrollView]. Only the rows currently on screen (and their downsized
@@ -562,17 +619,39 @@ class _DkTrackRowState extends State<DkTrackRow> {
 class DkTrackTable extends StatelessWidget {
   final List<Song> songs;
 
-  /// Plays the tapped track in the context of the whole list.
+  /// Plays the tapped track in the context of the whole list. The index is
+  /// ALWAYS an index into [songs] (the original full list), even when
+  /// [visibleIndices] filters the view — prev/next keep walking the whole
+  /// playlist.
   final void Function(int index) onPlay;
 
   /// Opens the song menu at a global position.
   final void Function(Song song, Offset globalPosition) onMenu;
+
+  /// When non-null, only these ORIGINAL indices of [songs] are rendered (the
+  /// in-playlist search filter). Rows keep their original numbering and all
+  /// callbacks stay keyed to the original index/Song. An empty list renders
+  /// the "无匹配歌曲" placeholder row.
+  final List<int>? visibleIndices;
+
+  /// Attached to the column-header block so pages can measure where row 0
+  /// starts (for 定位 scrolling). See [DkTrackPageBody].
+  final Key? headerKey;
+
+  /// Original index of the row to flash-highlight, driven by [flashNonce]
+  /// (see [DkTrackRow.flashNonce]).
+  final int? flashIndex;
+  final int flashNonce;
 
   const DkTrackTable({
     super.key,
     required this.songs,
     required this.onPlay,
     required this.onMenu,
+    this.visibleIndices,
+    this.headerKey,
+    this.flashIndex,
+    this.flashNonce = 0,
   });
 
   @override
@@ -590,10 +669,12 @@ class DkTrackTable extends StatelessWidget {
         MediaQuery.sizeOf(context).width - AppDimens.space32 * 2;
     final bool showAlbum = width >= AppDimens.tableAlbumHideWidth;
 
+    final List<int>? visible = visibleIndices;
     return SliverMainAxisGroup(
       slivers: <Widget>[
         SliverToBoxAdapter(
           child: Column(
+            key: headerKey,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
               _header(showAlbum),
@@ -602,23 +683,39 @@ class DkTrackTable extends StatelessWidget {
             ],
           ),
         ),
-        SliverFixedExtentList.builder(
-          // Rows are a fixed 52px tall, so the sliver can lay out lazily without
-          // measuring off-screen children at all.
-          itemExtent: 52,
-          itemCount: songs.length,
-          itemBuilder: (BuildContext context, int i) {
-            final Song s = songs[i];
-            return DkTrackRow(
-              index: i,
-              song: s,
-              active: activeId != null && s.id == activeId,
-              showAlbum: showAlbum,
-              onPlay: () => onPlay(i),
-              onMenu: (Offset pos) => onMenu(s, pos),
-            );
-          },
-        ),
+        if (visible != null && visible.isEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: AppDimens.space32),
+              child: Center(
+                child: Text('无匹配歌曲', style: AppTypography.label),
+              ),
+            ),
+          )
+        else
+          SliverFixedExtentList.builder(
+            // Rows are a fixed 52px tall, so the sliver can lay out lazily
+            // without measuring off-screen children at all.
+            itemExtent: kDkTrackRowExtent,
+            itemCount: visible?.length ?? songs.length,
+            itemBuilder: (BuildContext context, int i) {
+              // Map the visual row back to its ORIGINAL playlist index so
+              // numbering, playback and the ⋯ menu ignore the filter.
+              final int orig = visible == null ? i : visible[i];
+              final Song s = songs[orig];
+              return DkTrackRow(
+                index: orig,
+                song: s,
+                active: activeId != null && s.id == activeId,
+                showAlbum: showAlbum,
+                flashNonce: (flashIndex != null && flashIndex == orig)
+                    ? flashNonce
+                    : 0,
+                onPlay: () => onPlay(orig),
+                onMenu: (Offset pos) => onMenu(s, pos),
+              );
+            },
+          ),
       ],
     );
   }
@@ -649,6 +746,414 @@ class DkTrackTable extends StatelessWidget {
           const SizedBox(width: AppDimens.space4 + 36),
         ],
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// In-playlist search + locate (shared by the two playlist detail pages)
+// ---------------------------------------------------------------------------
+
+/// Precomputed lowercase search keys for one tracks list — built ONCE per list
+/// (not per keystroke per row). [search] returns the matching ORIGINAL indices.
+class DkTrackSearchIndex {
+  final List<Song> tracks;
+  final List<String> _keys;
+
+  DkTrackSearchIndex(this.tracks)
+      : _keys = List<String>.generate(
+          tracks.length,
+          (int i) {
+            final Song s = tracks[i];
+            // \n separates the fields so a query can't match across them.
+            return '${s.name}\n${s.artistNames}\n${s.album?.name ?? ''}'
+                .toLowerCase();
+          },
+          growable: false,
+        );
+
+  /// Case-insensitive substring match on title + artist + album (CJK works as
+  /// a plain substring). Empty/whitespace query matches everything.
+  List<int> search(String query) {
+    final String q = query.trim().toLowerCase();
+    if (q.isEmpty) {
+      return List<int>.generate(tracks.length, (int i) => i, growable: false);
+    }
+    return <int>[
+      for (int i = 0; i < _keys.length; i++)
+        if (_keys[i].contains(q)) i,
+    ];
+  }
+}
+
+/// The header-row toolbar shared by both playlist detail pages: a magnifier
+/// that expands into an inline frosted search field (with live "N 首" match
+/// count), plus the 定位到正在播放 crosshair.
+///
+/// The locate button watches ONLY the current song's identity via
+/// `context.select` — never the whole [PlayerProvider] (per-tick trap).
+class DkTrackToolbar extends StatefulWidget {
+  /// The page's ORIGINAL full tracks list (locate enablement checks membership
+  /// by id + source).
+  final List<Song> tracks;
+
+  /// Live filter callback; fired with '' when the field clears/collapses.
+  final ValueChanged<String> onQuery;
+
+  /// Match count to show next to the field while a query is active.
+  final int? matchCount;
+
+  /// Locate click (the page owns the scroll).
+  final VoidCallback onLocate;
+
+  /// Bump to force-collapse + clear the search field from outside (used when
+  /// locate clears an active filter).
+  final int resetNonce;
+
+  const DkTrackToolbar({
+    super.key,
+    required this.tracks,
+    required this.onQuery,
+    required this.onLocate,
+    this.matchCount,
+    this.resetNonce = 0,
+  });
+
+  @override
+  State<DkTrackToolbar> createState() => _DkTrackToolbarState();
+}
+
+class _DkTrackToolbarState extends State<DkTrackToolbar> {
+  bool _open = false;
+  final TextEditingController _ctrl = TextEditingController();
+  late final FocusNode _focus = FocusNode(
+    onKeyEvent: (FocusNode node, KeyEvent event) {
+      if (event is KeyDownEvent &&
+          event.logicalKey == LogicalKeyboardKey.escape) {
+        _collapse();
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    },
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    // Clearing + losing focus collapses back to the icon.
+    _focus.addListener(() {
+      if (!_focus.hasFocus && _ctrl.text.isEmpty && _open && mounted) {
+        setState(() => _open = false);
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(DkTrackToolbar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.resetNonce != oldWidget.resetNonce) {
+      _ctrl.clear();
+      _open = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _collapse() {
+    _ctrl.clear();
+    widget.onQuery('');
+    if (mounted) setState(() => _open = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Identity-only watch: rebuilds when the playing song changes, NOT on
+    // every position tick.
+    final (int, MusicSource)? now =
+        context.select<PlayerProvider, (int, MusicSource)?>(
+      (PlayerProvider p) {
+        final Song? s = p.currentSong;
+        return s == null ? null : (s.id, s.source);
+      },
+    );
+    final bool canLocate = now != null &&
+        widget.tracks
+            .any((Song s) => s.id == now.$1 && s.source == now.$2);
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        AnimatedSize(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.centerRight,
+          child: _open
+              ? _field()
+              : DkHoverIcon(
+                  icon: Icons.search_rounded,
+                  tooltip: '歌单内搜索',
+                  onTap: () => setState(() => _open = true),
+                ),
+        ),
+        const SizedBox(width: AppDimens.space4),
+        DkHoverIcon(
+          icon: Icons.my_location_rounded,
+          tooltip: canLocate ? '定位到正在播放' : '当前播放的歌曲不在此歌单',
+          color: canLocate ? null : AppColors.onFaint,
+          onTap: canLocate ? widget.onLocate : null,
+        ),
+      ],
+    );
+  }
+
+  Widget _field() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        DkGlass(
+          radius: AppDimens.radiusPill,
+          padding: const EdgeInsets.symmetric(horizontal: AppDimens.space12),
+          child: SizedBox(
+            width: 220,
+            height: 36,
+            child: Row(
+              children: <Widget>[
+                const Icon(Icons.search_rounded,
+                    size: 16, color: AppColors.onMuted),
+                const SizedBox(width: AppDimens.space8),
+                Expanded(
+                  child: Center(
+                    child: TextField(
+                      controller: _ctrl,
+                      focusNode: _focus,
+                      autofocus: true,
+                      style: AppTypography.body,
+                      cursorColor: AppColors.accentPlay,
+                      decoration: InputDecoration.collapsed(
+                        hintText: '搜索本歌单',
+                        hintStyle: AppTypography.label,
+                      ),
+                      onChanged: (String v) {
+                        widget.onQuery(v);
+                        setState(() {}); // clear-X / count visibility
+                      },
+                    ),
+                  ),
+                ),
+                if (_ctrl.text.isNotEmpty)
+                  DkHoverIcon(
+                    icon: Icons.close_rounded,
+                    size: 14,
+                    tooltip: '清除',
+                    onTap: () {
+                      _ctrl.clear();
+                      widget.onQuery('');
+                      setState(() {});
+                      _focus.requestFocus();
+                    },
+                  ),
+              ],
+            ),
+          ),
+        ),
+        if (_ctrl.text.trim().isNotEmpty && widget.matchCount != null)
+          Padding(
+            padding: const EdgeInsets.only(left: AppDimens.space8),
+            child: Text('${widget.matchCount} 首', style: AppTypography.caption),
+          ),
+      ],
+    );
+  }
+}
+
+/// The shared scroll body of a playlist detail page: header sliver (built by
+/// the page around the [DkTrackToolbar] this widget hands it) + padded
+/// [DkTrackTable], with in-playlist search and 定位到正在播放 wired up.
+///
+/// Search-filter play semantics: [onPlayIndex] always receives the ORIGINAL
+/// index into [tracks]; pages call `playQueue(tracks, index: i)` so the queue
+/// stays the full playlist regardless of the filter.
+class DkTrackPageBody extends StatefulWidget {
+  /// The full, original tracks list.
+  final List<Song> tracks;
+
+  /// Builds the page-specific header; embed [toolbar] next to the header's
+  /// existing action buttons.
+  final Widget Function(BuildContext context, Widget toolbar) headerBuilder;
+
+  /// Play a track by its ORIGINAL index in [tracks] (full-queue semantics).
+  final void Function(int index) onPlayIndex;
+
+  /// Open the ⋯ / right-click menu for an (original) [Song].
+  final void Function(Song song, Offset globalPosition) onMenu;
+
+  /// Rendered instead of the table when [tracks] is empty.
+  final Widget emptyPlaceholder;
+
+  const DkTrackPageBody({
+    super.key,
+    required this.tracks,
+    required this.headerBuilder,
+    required this.onPlayIndex,
+    required this.onMenu,
+    required this.emptyPlaceholder,
+  });
+
+  @override
+  State<DkTrackPageBody> createState() => _DkTrackPageBodyState();
+}
+
+class _DkTrackPageBodyState extends State<DkTrackPageBody> {
+  final ScrollController _scroll = ScrollController();
+  final GlobalKey _tableHeaderKey = GlobalKey();
+
+  String _query = '';
+  int _resetNonce = 0;
+  int? _flashIndex;
+  int _flashNonce = 0;
+  Timer? _flashTimer;
+
+  DkTrackSearchIndex? _searchIndex;
+  double? _rowStartCache;
+
+  /// Lowercase keys, rebuilt only when the tracks LIST INSTANCE changes
+  /// (copy-on-write providers hand out a new list on edit).
+  DkTrackSearchIndex get _index {
+    if (_searchIndex == null || !identical(_searchIndex!.tracks, widget.tracks)) {
+      _searchIndex = DkTrackSearchIndex(widget.tracks);
+    }
+    return _searchIndex!;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    // Opportunistic measure while the header is guaranteed attached (page
+    // opens at offset 0) so locate still works after scrolling it out of the
+    // build window.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _measureRowStart();
+    });
+  }
+
+  @override
+  void dispose() {
+    _flashTimer?.cancel();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  /// Scroll offset at which table row 0 begins: measured from the table's
+  /// column-header block (GlobalKey) — its reveal offset within the viewport
+  /// plus its own pixel height. Cached because the block is virtualized away
+  /// when scrolled deep.
+  double? _measureRowStart() {
+    final BuildContext? ctx = _tableHeaderKey.currentContext;
+    if (ctx != null) {
+      final RenderObject? ro = ctx.findRenderObject();
+      if (ro is RenderBox && ro.attached && ro.hasSize) {
+        _rowStartCache =
+            RenderAbstractViewport.of(ro).getOffsetToReveal(ro, 0).offset +
+                ro.size.height;
+      }
+    }
+    return _rowStartCache;
+  }
+
+  Future<void> _locate() async {
+    final Song? cur = context.read<PlayerProvider>().currentSong;
+    if (cur == null) return;
+    final int orig = widget.tracks
+        .indexWhere((Song s) => s.id == cur.id && s.source == cur.source);
+    if (orig < 0) return;
+
+    List<int>? visible =
+        _query.trim().isEmpty ? null : _index.search(_query);
+    if (visible != null && !visible.contains(orig)) {
+      // The active filter hides the playing song: clear it first, then scroll
+      // once the full list is laid out again.
+      setState(() {
+        _query = '';
+        _resetNonce++;
+      });
+      visible = null;
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+    }
+
+    if (!_scroll.hasClients) return;
+    final double? rowStart = _measureRowStart();
+    if (rowStart == null) return;
+
+    // Visual position of the row under the current filter (== original index
+    // when unfiltered).
+    final int display = visible == null ? orig : visible.indexOf(orig);
+    final ScrollPosition pos = _scroll.position;
+    final double target = (rowStart +
+            display * kDkTrackRowExtent +
+            kDkTrackRowExtent / 2 -
+            pos.viewportDimension / 2)
+        .clamp(0.0, pos.maxScrollExtent)
+        .toDouble();
+    await _scroll.animateTo(
+      target,
+      duration: const Duration(milliseconds: 550),
+      curve: Curves.easeInOutCubic,
+    );
+    if (!mounted) return;
+
+    // Flash after the scroll settles; drop the trigger once the fade is done
+    // so re-built rows don't replay it later.
+    setState(() {
+      _flashIndex = orig;
+      _flashNonce++;
+    });
+    _flashTimer?.cancel();
+    _flashTimer = Timer(const Duration(milliseconds: 1400), () {
+      if (mounted) setState(() => _flashIndex = null);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<int>? visible =
+        _query.trim().isEmpty ? null : _index.search(_query);
+    final Widget toolbar = DkTrackToolbar(
+      tracks: widget.tracks,
+      matchCount: visible?.length,
+      resetNonce: _resetNonce,
+      onQuery: (String v) => setState(() => _query = v),
+      onLocate: _locate,
+    );
+    return CustomScrollView(
+      controller: _scroll,
+      slivers: <Widget>[
+        SliverToBoxAdapter(child: widget.headerBuilder(context, toolbar)),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(
+            AppDimens.space32,
+            AppDimens.space16,
+            AppDimens.space32,
+            AppDimens.space48,
+          ),
+          sliver: widget.tracks.isEmpty
+              ? SliverToBoxAdapter(child: widget.emptyPlaceholder)
+              : DkTrackTable(
+                  songs: widget.tracks,
+                  visibleIndices: visible,
+                  headerKey: _tableHeaderKey,
+                  flashIndex: _flashIndex,
+                  flashNonce: _flashNonce,
+                  onPlay: widget.onPlayIndex,
+                  onMenu: widget.onMenu,
+                ),
+        ),
+      ],
     );
   }
 }
