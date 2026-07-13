@@ -125,6 +125,12 @@ class _Background extends StatelessWidget {
         context.select<PlayerProvider, bool>((p) => p.isPlaying);
     final bool reactive =
         context.select<SettingsProvider, bool>((s) => s.rhythmEnabled);
+    // Freeze this field's ~40k-vertex draw + toImageSync offscreen while the
+    // route is animating (push/pop): the lyrics route's own animation drives
+    // 1→0 on close, so 0<t<1 hits NeonFlowBackground's morph freeze gate and the
+    // field holds its last (RepaintBoundary-cached) frame instead of re-rastering
+    // — killing the outgoing half of the close-transition dual-mesh raster peak.
+    final Animation<double>? morph = ModalRoute.of(context)?.animation;
     return RepaintBoundary(
       child: NeonFlowBackground(
         imageUrl: artworkUrl,
@@ -132,6 +138,7 @@ class _Background extends StatelessWidget {
         playing: playing,
         reactive: reactive,
         lowFreqVolume: fft?.lowFreqVolume,
+        morph: morph,
       ),
     );
   }

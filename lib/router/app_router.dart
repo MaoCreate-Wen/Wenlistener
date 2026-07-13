@@ -30,12 +30,16 @@ class AppRouter {
   /// Slide-up (push) / slide-down (pop) transition for the sheet-like full-screen
   /// routes. Decelerates in (`easeOutCubic`), leaves promptly (`easeInCubic`).
   ///
-  /// A parallel fade rides on the same curve so the shared-element cover Hero
-  /// (`'album_art'`, mini-player ⇄ player `_Cover`) reads cleanly: the page
-  /// dissolves in over a shorter, gentler window while the cover flies, instead
-  /// of the whole surface hard-sliding underneath the in-flight cover. The
-  /// slide begins only part-way (0.12 down) so the flight isn't fighting a
-  /// full-height translation, and the same treatment reverses on pop.
+  /// SLIDE ONLY — no page-wide fade. A `FadeTransition` over this whole opaque,
+  /// multi-RepaintBoundary page forced a full-window group `saveLayer` (≈14.7MB
+  /// at 1440p) for the entire push AND pop, and made every nested offscreen
+  /// (mesh blit + per-line lyric blurs) re-composite through that group buffer —
+  /// a major contributor to the ~500MB open/close working-set spikes. The page
+  /// is `opaque:true` with its own always-painted mesh/wash background, so it
+  /// covers the surface beneath as it slides (no black flash / 闪屏), and the
+  /// shared-element cover Hero (`'album_art'`) flies ABOVE the page regardless of
+  /// the fade. The slide begins only part-way (0.12 down) so the flight isn't
+  /// fighting a full-height translation; the same reverses on pop.
   static Widget _sheetTransition(
     BuildContext context,
     Animation<double> animation,
@@ -47,15 +51,12 @@ class AppRouter {
       curve: Curves.easeOutCubic,
       reverseCurve: Curves.easeInCubic,
     );
-    return FadeTransition(
-      opacity: curved,
-      child: SlideTransition(
-        position: Tween<Offset>(
-          begin: const Offset(0, 0.12),
-          end: Offset.zero,
-        ).animate(curved),
-        child: child,
-      ),
+    return SlideTransition(
+      position: Tween<Offset>(
+        begin: const Offset(0, 0.12),
+        end: Offset.zero,
+      ).animate(curved),
+      child: child,
     );
   }
 

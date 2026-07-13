@@ -226,6 +226,14 @@ class _Background extends StatelessWidget {
         context.select<PlayerProvider, bool>((p) => p.isPlaying);
     final bool reactive =
         context.select<SettingsProvider, bool>((s) => s.rhythmEnabled);
+    // Freeze this field while /lyrics is animating OVER this page: the player's
+    // secondaryAnimation drives 1→0 as /lyrics pops, so 0<t<1 hits the morph
+    // freeze gate and the revealed player field holds its last cached frame
+    // instead of rastering a SECOND full ~40k-vertex draw + toImageSync
+    // concurrently with the outgoing lyrics field — the other half of the
+    // close-transition dual-mesh peak. (At rest with /lyrics fully open,
+    // secondaryAnimation==1.0 and this page is obscured/offstage, not painting.)
+    final Animation<double>? morph = ModalRoute.of(context)?.secondaryAnimation;
     return Stack(
       fit: StackFit.expand,
       children: <Widget>[
@@ -235,6 +243,7 @@ class _Background extends StatelessWidget {
             colors: colors,
             playing: playing,
             reactive: reactive,
+            morph: morph,
           ),
         ),
         const DecoratedBox(

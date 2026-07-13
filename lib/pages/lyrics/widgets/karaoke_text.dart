@@ -389,12 +389,25 @@ class _KaraokeWord extends StatelessWidget {
     final List<Shadow>? edge =
         s > 0.004 ? activeEdgeShadows(fontSize, intensity: s) : null;
 
+    final Widget dimBase = _wordLayer(textColor.withValues(alpha: darkAlpha),
+        shadows: edge, smooth: true);
+
+    // Fully-unsung word (the sweep hasn't reached it): [_maskShader] returns an
+    // all-transparent mask (right<=0 branch), so the dstIn bright layer would
+    // contribute ZERO pixels. Skip building the ShaderMask + its per-word
+    // saveLayer offscreen entirely and paint only the dim base — pixel-identical.
+    // Every upcoming word on the singing line takes this path, so the singing
+    // line's per-frame offscreen count collapses to just the word(s) under the
+    // moving edge plus the already-sung words behind it (which still need the
+    // real mask for their trailing fade). This is the #1 driver of the working-set
+    // ramp 2-3s after /lyrics opens.
+    if (sung <= 0) return dimBase;
+
     return Stack(
       clipBehavior: Clip.none,
       children: <Widget>[
         // Dim base (unsung) layer + the active white edge ring.
-        _wordLayer(textColor.withValues(alpha: darkAlpha),
-            shadows: edge, smooth: true),
+        dimBase,
         // Bright layer, inked in left→right by the karaoke sweep.
         ShaderMask(
           blendMode: BlendMode.dstIn,

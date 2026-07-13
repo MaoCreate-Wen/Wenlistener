@@ -397,9 +397,19 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
     }
 
     // FPS cap: the field rotates once per ~31s, so 30fps is visually identical
-    // to 60 while halving GPU cost — important on the emulator's slow GLES. Never
-    // throttle below a cross-fade so song changes stay buttery.
-    if (fading || nowMs - _lastEmitMs >= _kMinFrameIntervalMs) {
+    // to 60 while halving GPU cost — important on the emulator's slow GLES.
+    //
+    // MEMORY: the album cross-fade (`fading`) is an OPACITY blend of two nearly
+    // static flow layers — it does NOT need the monitor's full refresh. The old
+    // `fading ||` bypass exempted the ~500ms fade from the cap, so on a 180Hz
+    // panel it minted ~90 fresh toImageSync render targets (~3.7MB each) over the
+    // fade; Skia's uncapped GrResourceCache pools that scratch (~300MB) until the
+    // engine's idle GPU purge ~10s later — the exact "open spike, hold 10s, fall"
+    // the user sees. Cap the fade at 60fps too (a smooth opacity blend, 3× fewer
+    // targets); the flow itself is imperceptible at 60 vs 180 here.
+    final double minInterval =
+        fading ? _kFadeFrameIntervalMs : _kMinFrameIntervalMs;
+    if (nowMs - _lastEmitMs >= minInterval) {
       _lastEmitMs = nowMs;
       _frameTime.value = _frameTimeMs;
       // The render-glided `u_volume` — real FFT reading (smoothed) when present,
@@ -491,30 +501,33 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
 
   @override
   Widget build(BuildContext context) {
-    return RepaintBoundary(
-      child: Stack(
-        fit: StackFit.expand,
-        children: <Widget>[
-          // Palette wash beneath — never a black flash before the cover decodes.
-          _PaletteWash(colors: widget.colors),
-          // The faithful AMLL mesh-gradient, repainting on the Ticker. Its own
-          // RepaintBoundary keeps the per-frame mesh repaint from re-recording
-          // the static [_PaletteWash] beneath it, and isolates the field's raster
-          // layer from everything above (the lyrics).
-          RepaintBoundary(
-            child: CustomPaint(
-              size: Size.infinite,
-              painter: _MeshGradientPainter(
-                layers: _layers,
-                frameTime: _frameTime,
-                pulse: _pulseNotifier,
-                ditherShader: _ditherShader,
-                realMode: _realMode,
-              ),
+    // NOTE: no outer RepaintBoundary here — both call sites (lyrics/player
+    // `_Background`) already wrap this widget in one, so a boundary here would
+    // cache the identical full-window (≈14.7MB at 1440p) wash+mesh raster a
+    // redundant second time. The INNER boundary below is kept: it isolates the
+    // per-frame mesh repaint from re-recording the static [_PaletteWash].
+    return Stack(
+      fit: StackFit.expand,
+      children: <Widget>[
+        // Palette wash beneath — never a black flash before the cover decodes.
+        _PaletteWash(colors: widget.colors),
+        // The faithful AMLL mesh-gradient, repainting on the Ticker. Its own
+        // RepaintBoundary keeps the per-frame mesh repaint from re-recording
+        // the static [_PaletteWash] beneath it, and isolates the field's raster
+        // layer from everything above (the lyrics).
+        RepaintBoundary(
+          child: CustomPaint(
+            size: Size.infinite,
+            painter: _MeshGradientPainter(
+              layers: _layers,
+              frameTime: _frameTime,
+              pulse: _pulseNotifier,
+              ditherShader: _ditherShader,
+              realMode: _realMode,
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -586,6 +599,13 @@ const double _kClipOverscan = 1.0;
 /// Min ms between mesh repaints (30fps cap). The background's rotation is slow
 /// enough that 30 and 60 fps are indistinguishable here.
 const double _kMinFrameIntervalMs = 1000.0 / 30.0;
+
+/// Min ms between mesh repaints DURING an album cross-fade (60fps cap). Higher
+/// than steady-state so the opacity blend stays smooth, but far below a 180Hz
+/// panel's refresh — the uncapped fade was the dominant driver of the ~300MB
+/// GPU-scratch spike on opening /lyrics with a cold cover cache. Drop toward
+/// [_kMinFrameIntervalMs] (30fps) if the memory peak needs cutting further.
+const double _kFadeFrameIntervalMs = 1000.0 / 60.0;
 
 /// Internal render downscale for the mesh field. On Windows Flutter renders
 /// through Skia/ANGLE(D3D), which is fill-rate bound on this full-window mesh —
