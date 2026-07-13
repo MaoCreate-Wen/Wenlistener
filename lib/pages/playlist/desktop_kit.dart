@@ -4,7 +4,6 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 import 'package:flutter/services.dart'
@@ -14,6 +13,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../models/image_url.dart';
 import '../../models/song.dart';
+import '../../services/resource_cache.dart' show DiskCachedImage;
 import '../../state/library_provider.dart';
 import '../../state/local_playlist_provider.dart';
 import '../../state/player_provider.dart';
@@ -133,7 +133,8 @@ class DkArt extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final double r = circle ? size / 2 : (radius ?? AppDimens.albumRadius(size));
+    final double r =
+        circle ? size / 2 : (radius ?? AppDimens.albumRadius(size));
     final String? norm = httpsImageUrl(url);
     // Decode the CDN artwork at (roughly) its on-screen pixel size rather than
     // at full source resolution. For a 36px row cover this turns a ~300–800px
@@ -148,22 +149,43 @@ class DkArt extends StatelessWidget {
       alignment: Alignment.center,
       child: Icon(placeholder, size: size * 0.4, color: AppColors.onFaint),
     );
+    // Same decode-at-display-size behavior as the old CachedNetworkImage
+    // (memCacheWidth/Height == ResizeImage.resizeIfNeeded), now over the
+    // app's bounded disk cache; placeholder-until-frame + 500ms fade-in
+    // mirror the old widget's defaults.
     final Widget content = (norm == null)
         ? fallback
-        : CachedNetworkImage(
-            imageUrl: norm,
+        : Image(
+            image: ResizeImage.resizeIfNeeded(
+              cachePx,
+              cachePx,
+              DiskCachedImage(norm, headers: _headers(norm)),
+            ),
             width: size,
             height: size,
             fit: BoxFit.cover,
-            memCacheWidth: cachePx,
-            memCacheHeight: cachePx,
-            httpHeaders: _headers(norm),
-            placeholder: (_, __) => Container(
-              width: size,
-              height: size,
-              color: AppColors.surface2,
-            ),
-            errorWidget: (_, __, ___) => fallback,
+            frameBuilder: (BuildContext context, Widget child, int? frame,
+                    bool wasSync) =>
+                wasSync
+                    ? child
+                    : Stack(
+                        fit: StackFit.passthrough,
+                        children: <Widget>[
+                          if (frame == null)
+                            Container(
+                              width: size,
+                              height: size,
+                              color: AppColors.surface2,
+                            ),
+                          AnimatedOpacity(
+                            opacity: frame == null ? 0.0 : 1.0,
+                            duration: const Duration(milliseconds: 500),
+                            curve: Curves.easeOut,
+                            child: child,
+                          ),
+                        ],
+                      ),
+            errorBuilder: (_, __, ___) => fallback,
           );
     return ClipRRect(
       borderRadius: BorderRadius.circular(r),
@@ -292,9 +314,7 @@ class _DkSecondaryButtonState extends State<DkSecondaryButton> {
               if (widget.icon != null) ...<Widget>[
                 Icon(widget.icon,
                     size: 18,
-                    color: enabled
-                        ? AppColors.onSurface
-                        : AppColors.onFaint),
+                    color: enabled ? AppColors.onSurface : AppColors.onFaint),
                 const SizedBox(width: AppDimens.space8),
               ],
               Text(
@@ -472,8 +492,7 @@ class _DkTrackRowState extends State<DkTrackRow>
   Widget build(BuildContext context) {
     final Color accent = AppColors.accentOf(context);
     final Song s = widget.song;
-    final Color titleColor =
-        widget.active ? accent : AppColors.onSurface;
+    final Color titleColor = widget.active ? accent : AppColors.onSurface;
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
@@ -520,9 +539,7 @@ class _DkTrackRowState extends State<DkTrackRow>
                         onTap: widget.onPlay,
                       )
                     : Text(
-                        widget.active
-                            ? '♪'
-                            : '${widget.index + 1}',
+                        widget.active ? '♪' : '${widget.index + 1}',
                         textAlign: TextAlign.center,
                         style: AppTypography.label.copyWith(
                           color: widget.active ? accent : AppColors.onFaint,
@@ -571,8 +588,8 @@ class _DkTrackRowState extends State<DkTrackRow>
                     s.album?.name ?? '',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: AppTypography.label
-                        .copyWith(color: AppColors.onFaint),
+                    style:
+                        AppTypography.label.copyWith(color: AppColors.onFaint),
                   ),
                 ),
               ],
@@ -708,9 +725,8 @@ class DkTrackTable extends StatelessWidget {
                 song: s,
                 active: activeId != null && s.id == activeId,
                 showAlbum: showAlbum,
-                flashNonce: (flashIndex != null && flashIndex == orig)
-                    ? flashNonce
-                    : 0,
+                flashNonce:
+                    (flashIndex != null && flashIndex == orig) ? flashNonce : 0,
                 onPlay: () => onPlay(orig),
                 onMenu: (Offset pos) => onMenu(s, pos),
               );
@@ -721,8 +737,7 @@ class DkTrackTable extends StatelessWidget {
   }
 
   Widget _header(bool showAlbum) {
-    final TextStyle st =
-        AppTypography.caption.copyWith(letterSpacing: 1.2);
+    final TextStyle st = AppTypography.caption.copyWith(letterSpacing: 1.2);
     return Padding(
       padding: const EdgeInsets.symmetric(
         horizontal: AppDimens.space12,
@@ -730,7 +745,9 @@ class DkTrackTable extends StatelessWidget {
       ),
       child: Row(
         children: <Widget>[
-          SizedBox(width: 34, child: Text('#', textAlign: TextAlign.center, style: st)),
+          SizedBox(
+              width: 34,
+              child: Text('#', textAlign: TextAlign.center, style: st)),
           const SizedBox(width: AppDimens.space8 + 36 + AppDimens.space12),
           Expanded(flex: 4, child: Text('标题', style: st)),
           const SizedBox(width: AppDimens.space12),
@@ -882,8 +899,7 @@ class _DkTrackToolbarState extends State<DkTrackToolbar> {
       },
     );
     final bool canLocate = now != null &&
-        widget.tracks
-            .any((Song s) => s.id == now.$1 && s.source == now.$2);
+        widget.tracks.any((Song s) => s.id == now.$1 && s.source == now.$2);
 
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -1024,7 +1040,8 @@ class _DkTrackPageBodyState extends State<DkTrackPageBody> {
   /// Lowercase keys, rebuilt only when the tracks LIST INSTANCE changes
   /// (copy-on-write providers hand out a new list on edit).
   DkTrackSearchIndex get _index {
-    if (_searchIndex == null || !identical(_searchIndex!.tracks, widget.tracks)) {
+    if (_searchIndex == null ||
+        !identical(_searchIndex!.tracks, widget.tracks)) {
       _searchIndex = DkTrackSearchIndex(widget.tracks);
     }
     return _searchIndex!;
@@ -1072,8 +1089,7 @@ class _DkTrackPageBodyState extends State<DkTrackPageBody> {
         .indexWhere((Song s) => s.id == cur.id && s.source == cur.source);
     if (orig < 0) return;
 
-    List<int>? visible =
-        _query.trim().isEmpty ? null : _index.search(_query);
+    List<int>? visible = _query.trim().isEmpty ? null : _index.search(_query);
     if (visible != null && !visible.contains(orig)) {
       // The active filter hides the playing song: clear it first, then scroll
       // once the full list is laid out again.
@@ -1231,11 +1247,12 @@ class DkMenuEntry<T> {
         divider = true;
 }
 
-/// Apple-Music **white frosted glass** popup anchored at [globalPosition]
-/// (top-left), clamped on screen. Matches the queue panel material per
-/// AMLL_FIDELITY_SPEC_2 §2: blur 28, white α0.15 fill, white α0.25 hairline,
-/// dark legible text (black α0.88) / icons (black α0.72). Returns the tapped
-/// entry's value, or null if dismissed.
+/// Frosted-glass popup anchored at [globalPosition] (top-left), clamped on
+/// screen. Matches the queue panel material per AMLL_FIDELITY_SPEC_2 §2:
+/// blur 28, white α0.15 fill, white α0.25 hairline. Over the app's dark
+/// frosted backdrops the panel reads dark, so item text/icons are **light**
+/// (white α0.88 text / α0.72 icons — see [_DkGlassMenuItem]). Returns the
+/// tapped entry's value, or null if dismissed.
 Future<T?> dkShowGlassMenu<T>(
   BuildContext context,
   Offset globalPosition,
@@ -1254,8 +1271,8 @@ Future<T?> dkShowGlassMenu<T>(
     transitionDuration: const Duration(milliseconds: 130),
     pageBuilder: (BuildContext ctx, _, __) {
       final Size sz = MediaQuery.of(ctx).size;
-      final double left = globalPosition.dx
-          .clamp(8.0, math.max(8.0, sz.width - width - 8));
+      final double left =
+          globalPosition.dx.clamp(8.0, math.max(8.0, sz.width - width - 8));
       final double top = globalPosition.dy
           .clamp(8.0, math.max(8.0, sz.height - estHeight - 8));
       return Stack(
@@ -1268,8 +1285,8 @@ Future<T?> dkShowGlassMenu<T>(
         ],
       );
     },
-    transitionBuilder: (BuildContext ctx, Animation<double> anim, _,
-        Widget child) {
+    transitionBuilder:
+        (BuildContext ctx, Animation<double> anim, _, Widget child) {
       final CurvedAnimation curved =
           CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
       return FadeTransition(
@@ -1327,9 +1344,8 @@ class _DkGlassMenu<T> extends StatelessWidget {
                       alignment: Alignment.center,
                       child: Container(
                         height: 1,
-                        margin:
-                            const EdgeInsets.symmetric(horizontal: 12),
-                        color: Colors.black.withValues(alpha: 0.10),
+                        margin: const EdgeInsets.symmetric(horizontal: 12),
+                        color: Colors.white.withValues(alpha: 0.14),
                       ),
                     )
                   else
@@ -1357,12 +1373,13 @@ class _DkGlassMenuItemState<T> extends State<_DkGlassMenuItem<T>> {
   @override
   Widget build(BuildContext context) {
     final DkMenuEntry<T> e = widget.entry;
-    // Legible on the light-frosted surface (spec §2): black α0.88 text,
-    // black α0.72 icons; danger red for destructive rows.
+    // Legible on the app's dark frosted surfaces: white α0.88 text,
+    // white α0.72 icons (matches the other dk glass surfaces); light danger
+    // red for destructive rows (same red as showWenContextMenu).
     final Color fg =
-        e.danger ? const Color(0xF2C62828) : const Color(0xE0000000);
+        e.danger ? const Color(0xFFEF4444) : const Color(0xE0FFFFFF);
     final Color iconC =
-        e.danger ? const Color(0xF2C62828) : const Color(0xB7000000);
+        e.danger ? const Color(0xFFEF4444) : const Color(0xB8FFFFFF);
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
@@ -1376,7 +1393,7 @@ class _DkGlassMenuItemState<T> extends State<_DkGlassMenuItem<T>> {
           padding: const EdgeInsets.symmetric(horizontal: AppDimens.space12),
           decoration: BoxDecoration(
             color: _hover
-                ? Colors.black.withValues(alpha: 0.06)
+                ? Colors.white.withValues(alpha: 0.10)
                 : Colors.transparent,
             borderRadius: BorderRadius.circular(AppDimens.radiusSm),
           ),
@@ -1513,7 +1530,8 @@ Future<void> dkAddToLocalPlaylist(BuildContext context, Song song) async {
 
   if (id == null || !context.mounted) return;
   if (id == '__new__') {
-    final String? name = await dkPromptText(context, title: '新建共同歌单', hint: '歌单名称');
+    final String? name =
+        await dkPromptText(context, title: '新建共同歌单', hint: '歌单名称');
     if (name == null || name.trim().isEmpty || !context.mounted) return;
     await lp.create(name.trim(), tracks: <Song>[song]);
     if (context.mounted) dkToast(context, '已创建并添加到「${name.trim()}」');
@@ -1620,8 +1638,8 @@ Future<String?> dkPromptText(
           TextButton(
             onPressed: () => Navigator.pop(ctx, ctrl.text),
             child: Text(confirmLabel,
-                style: AppTypography.label
-                    .copyWith(color: AppColors.accentPlay)),
+                style:
+                    AppTypography.label.copyWith(color: AppColors.accentPlay)),
           ),
         ],
       );
@@ -1644,7 +1662,8 @@ class DkVipPill extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xFFF5C518).withValues(alpha: 0.16),
         borderRadius: BorderRadius.circular(AppDimens.radiusSm),
-        border: Border.all(color: const Color(0xFFF5C518).withValues(alpha: 0.5)),
+        border:
+            Border.all(color: const Color(0xFFF5C518).withValues(alpha: 0.5)),
       ),
       child: Text(
         label,
@@ -1760,7 +1779,8 @@ class DkQrCard extends StatelessWidget {
         ),
       );
     } else if (bytes != null) {
-      inner = Image.memory(bytes!, width: size, height: size, gaplessPlayback: true);
+      inner = Image.memory(bytes!,
+          width: size, height: size, gaplessPlayback: true);
     } else if (content != null && content!.isNotEmpty) {
       inner = QrImageView(
         data: content!,

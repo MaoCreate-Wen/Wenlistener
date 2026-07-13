@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 
 import '../../models/play_url.dart';
 import '../../models/song.dart';
+import '../../services/resource_cache.dart';
+import '../../services/settings_store.dart';
 import '../../shell/fullscreen_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../theme/app_colors.dart';
@@ -60,7 +62,27 @@ class SettingsBody extends StatelessWidget {
         // --- 显示 -----------------------------------------------------------
         const _SettingsSection(
           title: '显示',
-          child: _FullscreenRow(),
+          child: Column(
+            children: <Widget>[
+              _FullscreenRow(),
+              Divider(height: AppDimens.space24, color: AppColors.glassBorder),
+              _CloseBehaviorRow(),
+            ],
+          ),
+        ),
+        const SizedBox(height: AppDimens.sectionGap),
+
+        // --- 缓存 -----------------------------------------------------------
+        const _SettingsSection(
+          title: '缓存',
+          subtitle: '封面与歌词离线缓存，超出上限自动清理最久未使用的条目',
+          child: Column(
+            children: <Widget>[
+              _CacheLimitRow(),
+              Divider(height: AppDimens.space24, color: AppColors.glassBorder),
+              _CacheUsageRow(),
+            ],
+          ),
         ),
         const SizedBox(height: AppDimens.sectionGap),
 
@@ -295,6 +317,113 @@ class _FullscreenRowState extends State<_FullscreenRow> {
 }
 
 // ---------------------------------------------------------------------------
+// 关闭主界面时 (window ✕ behavior — persisted)
+// ---------------------------------------------------------------------------
+
+class _CloseBehaviorRow extends StatelessWidget {
+  const _CloseBehaviorRow();
+
+  @override
+  Widget build(BuildContext context) {
+    return const _FormRow(
+      icon: Icons.close_rounded,
+      label: '关闭主界面时',
+      hint: '最小化到托盘后播放继续，可从托盘菜单控制',
+      control: _CloseBehaviorSelector(),
+    );
+  }
+}
+
+/// Same bounded glass-pill + [dkShowGlassMenu] pattern as [_QualitySelector];
+/// writes go through [SettingsProvider.setCloseBehavior] (persisted, and read
+/// live by the tray controller's `onWindowClose`).
+class _CloseBehaviorSelector extends StatefulWidget {
+  const _CloseBehaviorSelector();
+
+  static const Map<CloseBehavior, String> _labels = <CloseBehavior, String>{
+    CloseBehavior.exit: '直接退出',
+    CloseBehavior.minimizeToTray: '最小化到托盘',
+  };
+
+  static const double _width = 148;
+
+  @override
+  State<_CloseBehaviorSelector> createState() => _CloseBehaviorSelectorState();
+}
+
+class _CloseBehaviorSelectorState extends State<_CloseBehaviorSelector> {
+  final GlobalKey _anchor = GlobalKey();
+  bool _hover = false;
+
+  Future<void> _open(CloseBehavior current) async {
+    final RenderBox? box =
+        _anchor.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final Offset at = box.localToGlobal(Offset(0, box.size.height + 6));
+    final CloseBehavior? picked = await dkShowGlassMenu<CloseBehavior>(
+      context,
+      at,
+      <DkMenuEntry<CloseBehavior>>[
+        for (final CloseBehavior b in CloseBehavior.values)
+          DkMenuEntry<CloseBehavior>(
+            value: b,
+            label: _CloseBehaviorSelector._labels[b] ?? b.name,
+            selected: b == current,
+          ),
+      ],
+      // Wider than the trigger pill: the popup row also fits the trailing
+      // check icon, which would otherwise ellipsize 最小化到托盘.
+      width: _CloseBehaviorSelector._width + 28,
+    );
+    if (picked != null && mounted) {
+      context.read<SettingsProvider>().setCloseBehavior(picked);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final CloseBehavior b = context.select<SettingsProvider, CloseBehavior>(
+        (SettingsProvider s) => s.closeBehavior);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: AmllBounce(
+        onTap: () => _open(b),
+        child: Container(
+          key: _anchor,
+          width: _CloseBehaviorSelector._width,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppDimens.space12,
+            vertical: AppDimens.space8,
+          ),
+          decoration: BoxDecoration(
+            color: _hover ? AppColors.pressed : AppColors.glass,
+            borderRadius: BorderRadius.circular(AppDimens.radiusMd),
+            border: Border.all(color: AppColors.glassBorder),
+          ),
+          child: Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  _CloseBehaviorSelector._labels[b] ?? b.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.body,
+                ),
+              ),
+              const SizedBox(width: AppDimens.space8),
+              const Icon(Icons.expand_more_rounded,
+                  color: AppColors.onMuted, size: 20),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 音质 dropdown
 // ---------------------------------------------------------------------------
 
@@ -400,6 +529,199 @@ class _QualitySelectorState extends State<_QualitySelector> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 缓存 (disk cache budget + usage / clear)
+// ---------------------------------------------------------------------------
+
+class _CacheLimitRow extends StatelessWidget {
+  const _CacheLimitRow();
+
+  @override
+  Widget build(BuildContext context) {
+    return const _FormRow(
+      icon: Icons.sd_storage_rounded,
+      label: '缓存上限',
+      hint: '超过上限时按最久未使用自动清理（不缓存音频流）',
+      control: _CacheLimitSelector(),
+    );
+  }
+}
+
+/// Same bounded glass-pill + [dkShowGlassMenu] pattern as [_QualitySelector];
+/// choices come from [kCacheMaxBytesChoices], writes go through
+/// [SettingsProvider.setCacheMaxBytes] (persisted + pushed into the live
+/// [ResourceCache] so eviction reacts immediately).
+class _CacheLimitSelector extends StatefulWidget {
+  const _CacheLimitSelector();
+
+  static const double _width = 132;
+
+  @override
+  State<_CacheLimitSelector> createState() => _CacheLimitSelectorState();
+}
+
+class _CacheLimitSelectorState extends State<_CacheLimitSelector> {
+  final GlobalKey _anchor = GlobalKey();
+  bool _hover = false;
+
+  Future<void> _open(int current) async {
+    final RenderBox? box =
+        _anchor.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final Offset at = box.localToGlobal(Offset(0, box.size.height + 6));
+    final int? picked = await dkShowGlassMenu<int>(
+      context,
+      at,
+      <DkMenuEntry<int>>[
+        for (final int bytes in kCacheMaxBytesChoices)
+          DkMenuEntry<int>(
+            value: bytes,
+            label: cacheBytesLabel(bytes),
+            selected: bytes == current,
+          ),
+      ],
+      width: _CacheLimitSelector._width,
+    );
+    if (picked != null && mounted) {
+      context.read<SettingsProvider>().setCacheMaxBytes(picked);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final int bytes = context
+        .select<SettingsProvider, int>((SettingsProvider s) => s.cacheMaxBytes);
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: AmllBounce(
+        onTap: () => _open(bytes),
+        child: Container(
+          key: _anchor,
+          width: _CacheLimitSelector._width,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppDimens.space12,
+            vertical: AppDimens.space8,
+          ),
+          decoration: BoxDecoration(
+            color: _hover ? AppColors.pressed : AppColors.glass,
+            borderRadius: BorderRadius.circular(AppDimens.radiusMd),
+            border: Border.all(color: AppColors.glassBorder),
+          ),
+          child: Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  cacheBytesLabel(bytes),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.body,
+                ),
+              ),
+              const SizedBox(width: AppDimens.space8),
+              const Icon(Icons.expand_more_rounded,
+                  color: AppColors.onMuted, size: 20),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 已用空间 display (computed async on open / after clearing) + 清空缓存 button.
+class _CacheUsageRow extends StatefulWidget {
+  const _CacheUsageRow();
+
+  @override
+  State<_CacheUsageRow> createState() => _CacheUsageRowState();
+}
+
+class _CacheUsageRowState extends State<_CacheUsageRow> {
+  Future<int>? _usage;
+  bool _clearing = false;
+  bool _hover = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _usage = ResourceCache.instance.totalBytes();
+  }
+
+  Future<void> _clear() async {
+    if (_clearing) return;
+    setState(() => _clearing = true);
+    await ResourceCache.instance.clear();
+    if (!mounted) return;
+    setState(() {
+      _clearing = false;
+      _usage = ResourceCache.instance.totalBytes();
+    });
+  }
+
+  static String _fmt(int bytes) {
+    if (bytes >= (1 << 30)) {
+      return '${(bytes / (1 << 30)).toStringAsFixed(2)} GB';
+    }
+    if (bytes >= (1 << 20)) {
+      return '${(bytes / (1 << 20)).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / (1 << 10)).toStringAsFixed(0)} KB';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _FormRow(
+      icon: Icons.cleaning_services_rounded,
+      label: '已用空间',
+      hint: '位于系统临时目录，可随时清空',
+      control: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          FutureBuilder<int>(
+            future: _usage,
+            builder: (BuildContext context, AsyncSnapshot<int> snap) => Text(
+              snap.hasData ? _fmt(snap.data!) : '计算中…',
+              style: AppTypography.body.copyWith(color: AppColors.onMuted),
+            ),
+          ),
+          const SizedBox(width: AppDimens.space16),
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            onEnter: (_) => setState(() => _hover = true),
+            onExit: (_) => setState(() => _hover = false),
+            child: AmllBounce(
+              onTap: _clear,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppDimens.space16,
+                  vertical: AppDimens.space8,
+                ),
+                decoration: BoxDecoration(
+                  color: _hover ? AppColors.pressed : AppColors.glass,
+                  borderRadius: BorderRadius.circular(AppDimens.radiusMd),
+                  border: Border.all(color: AppColors.glassBorder),
+                ),
+                child: _clearing
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.onMuted,
+                        ),
+                      )
+                    : Text('清空缓存', style: AppTypography.body),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

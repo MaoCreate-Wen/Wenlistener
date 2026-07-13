@@ -21,6 +21,7 @@ import 'services/playback_store.dart';
 import 'services/qq_api.dart';
 import 'services/qq_cookie_store.dart';
 import 'services/settings_store.dart';
+import 'shell/tray_controller.dart';
 import 'state/settings_provider.dart';
 
 /// Desktop (Windows) entry point. Builds the service graph ONCE — identical to
@@ -125,6 +126,7 @@ Future<void> main() async {
     source: settingsData.source,
     rhythmEnabled: settingsData.rhythmEnabled,
     audioQuality: settingsData.audioQuality,
+    closeBehavior: settingsData.closeBehavior,
   );
 
   // (K) INIT + RESTORE (paused, zero-network cold start) + PALETTE.
@@ -132,6 +134,18 @@ Future<void> main() async {
   final PlaybackSession? saved = await playbackStore.load();
   if (saved != null) await audio.restore(saved);
   const ArtworkPalette palette = ArtworkPalette();
+
+  // (K2) SYSTEM TRAY + close-behavior + 轻量模式 — lives outside the widget
+  // tree (like the rest of the service graph) so tray playback controls and
+  // the ✕ setting keep working while 轻量模式 has the UI tree disposed.
+  // Windows-only, same guard as the window bootstrap above.
+  if (Platform.isWindows) {
+    final TrayController tray = TrayController(
+      audio: audio,
+      settings: settingsProvider,
+    );
+    await tray.init();
+  }
 
   // (L) run the app with the full service graph.
   runApp(

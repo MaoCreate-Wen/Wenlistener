@@ -1,11 +1,11 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 
 import '../models/image_url.dart';
+import '../services/resource_cache.dart' show DiskCachedImage;
 import '../theme/app_colors.dart';
 
 /// The album-art background for the player page.
@@ -130,7 +130,7 @@ class _ArtBackgroundState extends State<ArtBackground>
     // Netease CDN gates on a browser UA + Referer; without these headers it
     // returns 403 and the cover silently falls back to a placeholder.
     final ImageProvider image =
-        CachedNetworkImageProvider(url, headers: kNeteaseImageHeaders);
+        DiskCachedImage(url, headers: kNeteaseImageHeaders);
     return ClipRect(
       child: Stack(
         fit: StackFit.expand,

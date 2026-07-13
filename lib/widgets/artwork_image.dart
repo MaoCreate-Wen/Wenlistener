@@ -1,10 +1,10 @@
 import 'dart:math' as math;
 import 'dart:ui' show lerpDouble;
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../models/image_url.dart';
+import '../services/resource_cache.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_dimens.dart';
 import 'skeleton.dart';
@@ -79,11 +79,16 @@ class ArtworkImage extends StatelessWidget {
   /// exposed so callers can [precacheImage] the DESTINATION resolution before a
   /// Hero flight (equal construction ⇒ equal cache key ⇒ the flight and the
   /// settled cover paint from the already-decoded texture).
+  ///
+  /// The inner provider is [DiskCachedImage] (the app's bounded, LRU-evicted
+  /// disk cache under the temp dir) — same `(url)`-keyed equality as the
+  /// `CachedNetworkImageProvider` it replaced, so the [ResizeImage] bucketing
+  /// above and the in-memory `imageCache` keying are byte-for-byte unchanged.
   static ImageProvider providerFor(String url, int cachePx) =>
       ResizeImage.resizeIfNeeded(
         cachePx,
         cachePx,
-        CachedNetworkImageProvider(url, headers: kNeteaseImageHeaders),
+        DiskCachedImage(url, headers: kNeteaseImageHeaders),
       );
 
   static Widget _shuttle(

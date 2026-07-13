@@ -3,13 +3,13 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 
 import '../models/image_url.dart';
 import '../services/artwork_palette.dart' show kCoverAnalysisDecodeDim;
+import '../services/resource_cache.dart' show DiskCachedImage;
 import '../theme/app_colors.dart';
 import 'mesh_gradient/album_texture.dart';
 import 'mesh_gradient/bhp_mesh.dart';
@@ -130,6 +130,18 @@ class NeonFlowBackground extends StatefulWidget {
     } finally {
       _NeonFlowBackgroundState._prewarming.remove(url);
     }
+  }
+
+  /// Drops (and disposes) every cached 32² mesh texture. 轻量模式 memory hook:
+  /// call ONLY while no [NeonFlowBackground] is mounted — live [MeshLayer]s
+  /// hold shaders built from these images, so clearing under a mounted field
+  /// would paint from disposed textures. An in-flight [prewarm] simply re-adds
+  /// its (single, ~4 KB) entry afterwards; the next mount re-decodes on demand.
+  static void clearTextureCache() {
+    for (final ui.Image tex in _NeonFlowBackgroundState._texCache.values) {
+      tex.dispose();
+    }
+    _NeonFlowBackgroundState._texCache.clear();
   }
 
   @override
@@ -471,7 +483,7 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
       final ImageProvider provider = ResizeImage.resizeIfNeeded(
         kCoverAnalysisDecodeDim,
         kCoverAnalysisDecodeDim,
-        CachedNetworkImageProvider(url, headers: kNeteaseImageHeaders),
+        DiskCachedImage(url, headers: kNeteaseImageHeaders),
       );
       final Completer<ui.Image> completer = Completer<ui.Image>();
       final ImageStream stream = provider.resolve(const ImageConfiguration());

@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:palette_generator/palette_generator.dart';
 
 import '../models/image_url.dart';
 import '../theme/app_colors.dart';
+import 'resource_cache.dart';
 
 /// Decode dimension for cover ANALYSIS consumers (palette quantization here,
 /// the 32² mesh-gradient texture in `NeonFlowBackground`). Both sample colour
@@ -89,7 +89,7 @@ class ArtworkPalette {
         ResizeImage.resizeIfNeeded(
           kCoverAnalysisDecodeDim,
           kCoverAnalysisDecodeDim,
-          CachedNetworkImageProvider(url, headers: kNeteaseImageHeaders),
+          DiskCachedImage(url, headers: kNeteaseImageHeaders),
         ),
       );
       final ByteData? bytes =

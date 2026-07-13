@@ -416,6 +416,14 @@ class _LyricsViewState extends State<LyricsView>
             if (i >= 0) _seekToLine(i);
           },
           child: Listener(
+            // opaque, NOT the default deferToChild: the child Stack only
+            // hit-tests where a Positioned line actually paints, so with
+            // deferToChild the wheel dead-zoned over the empty gaps between
+            // lines (and above/below the block). Opaque makes this Listener
+            // itself the full-viewport wheel surface — same handler, same
+            // user-scroll path/speed — while the ancestor GestureDetector
+            // keeps tap-to-seek and drag-to-browse exactly as before.
+            behavior: HitTestBehavior.opaque,
             onPointerSignal: (PointerSignalEvent e) {
               if (e is PointerScrollEvent) {
                 _controller.beginUserScroll();

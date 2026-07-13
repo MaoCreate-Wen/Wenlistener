@@ -35,40 +35,45 @@ Future<T?> showWenDialog<T>(
             autofocus: true,
             child: ConstrainedBox(
               constraints: BoxConstraints(maxWidth: width, maxHeight: maxH),
-              child: DkGlass(
-                blur: AppDimens.blurPanel,
-                padding: EdgeInsets.zero,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(
-                        AppDimens.space24,
-                        AppDimens.space16,
-                        AppDimens.space12,
-                        AppDimens.space12,
+              // Material ancestor for material children hosted in the dialog
+              // (e.g. the 设置 Switch) — transparent, so the glass look is kept.
+              child: Material(
+                type: MaterialType.transparency,
+                child: DkGlass(
+                  blur: AppDimens.blurPanel,
+                  padding: EdgeInsets.zero,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(
+                          AppDimens.space24,
+                          AppDimens.space16,
+                          AppDimens.space12,
+                          AppDimens.space12,
+                        ),
+                        child: Row(
+                          children: <Widget>[
+                            Expanded(
+                              child: Text(title, style: AppTypography.titleL),
+                            ),
+                            DkHoverIcon(
+                              icon: Icons.close_rounded,
+                              tooltip: '关闭 (Esc)',
+                              onTap: () => Navigator.of(ctx).maybePop(),
+                            ),
+                          ],
+                        ),
                       ),
-                      child: Row(
-                        children: <Widget>[
-                          Expanded(
-                            child: Text(title, style: AppTypography.titleL),
-                          ),
-                          DkHoverIcon(
-                            icon: Icons.close_rounded,
-                            tooltip: '关闭 (Esc)',
-                            onTap: () => Navigator.of(ctx).maybePop(),
-                          ),
-                        ],
+                      const Divider(height: 1, color: AppColors.glassBorder),
+                      Flexible(
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.all(AppDimens.space24),
+                          child: child,
+                        ),
                       ),
-                    ),
-                    const Divider(height: 1, color: AppColors.glassBorder),
-                    Flexible(
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.all(AppDimens.space24),
-                        child: child,
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),

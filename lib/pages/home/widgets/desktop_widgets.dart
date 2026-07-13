@@ -1,4 +1,3 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/gestures.dart'
     show
         GestureBinding,
@@ -10,6 +9,7 @@ import 'package:provider/provider.dart';
 
 import '../../../models/image_url.dart';
 import '../../../models/song.dart';
+import '../../../services/resource_cache.dart' show DiskCachedImage;
 import '../../../state/player_provider.dart';
 import '../../../theme/app_colors.dart';
 import '../../../theme/app_dimens.dart';
@@ -150,15 +150,30 @@ class ArtworkImage extends StatelessWidget {
     if (u == null || u.isEmpty) {
       img = placeholder;
     } else {
-      img = CachedNetworkImage(
-        imageUrl: u,
+      // Disk-cached (bounded LRU) replacement for the old CachedNetworkImage;
+      // placeholder-until-frame + AppMotion.fast fade-in match its behavior.
+      img = Image(
+        image: DiskCachedImage(u, headers: _headersFor(u)),
         width: size,
         height: size,
         fit: BoxFit.cover,
-        httpHeaders: _headersFor(u),
-        fadeInDuration: AppMotion.fast,
-        placeholder: (_, __) => placeholder,
-        errorWidget: (_, __, ___) => placeholder,
+        frameBuilder:
+            (BuildContext context, Widget child, int? frame, bool wasSync) =>
+                wasSync
+                    ? child
+                    : Stack(
+                        fit: StackFit.passthrough,
+                        children: <Widget>[
+                          if (frame == null) placeholder,
+                          AnimatedOpacity(
+                            opacity: frame == null ? 0.0 : 1.0,
+                            duration: AppMotion.fast,
+                            curve: Curves.easeOut,
+                            child: child,
+                          ),
+                        ],
+                      ),
+        errorBuilder: (_, __, ___) => placeholder,
       );
     }
 

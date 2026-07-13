@@ -1,7 +1,7 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../../models/image_url.dart';
+import '../../../services/resource_cache.dart' show DiskCachedImage;
 import '../../../theme/app_colors.dart';
 
 /// Self-contained album-art image for the player/lyrics surfaces (this agent owns
@@ -35,15 +35,30 @@ class PlayerArtwork extends StatelessWidget {
     if (resolved == null) {
       image = _placeholder();
     } else {
-      image = CachedNetworkImage(
-        imageUrl: resolved,
-        httpHeaders: kNeteaseImageHeaders,
+      // Disk-cached (bounded LRU) replacement for the old CachedNetworkImage;
+      // placeholder-until-frame + the 220ms fade-in match its behavior.
+      image = Image(
+        image: DiskCachedImage(resolved, headers: kNeteaseImageHeaders),
         width: size,
         height: size,
         fit: BoxFit.cover,
-        fadeInDuration: const Duration(milliseconds: 220),
-        placeholder: (_, __) => _placeholder(),
-        errorWidget: (_, __, ___) => _placeholder(),
+        frameBuilder:
+            (BuildContext context, Widget child, int? frame, bool wasSync) =>
+                wasSync
+                    ? child
+                    : Stack(
+                        fit: StackFit.passthrough,
+                        children: <Widget>[
+                          if (frame == null) _placeholder(),
+                          AnimatedOpacity(
+                            opacity: frame == null ? 0.0 : 1.0,
+                            duration: const Duration(milliseconds: 220),
+                            curve: Curves.easeOut,
+                            child: child,
+                          ),
+                        ],
+                      ),
+        errorBuilder: (_, __, ___) => _placeholder(),
       );
     }
 

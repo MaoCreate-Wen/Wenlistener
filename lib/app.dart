@@ -38,6 +38,33 @@ import 'state/search_provider.dart';
 import 'state/settings_provider.dart';
 import 'theme/app_theme.dart';
 
+/// 轻量模式 (lightweight mode) switch — the app-root swap lever.
+///
+/// While `true`, [WenListenerApp] builds a trivial [_LightweightPlaceholder]
+/// instead of the full provider/router/shell tree, so **everything UI-side**
+/// (pages, mesh background, lyric stack, page-facing providers, decoded render
+/// objects) is unmounted and disposed. The service graph built in `main()`
+/// (player / AudioService / APIs / SettingsProvider / tray) lives OUTSIDE the
+/// widget tree and keeps running — playback, tray controls and the
+/// close-behavior setting all continue to work.
+///
+/// Flip it back to `false` (tray 显示主界面 / unchecking 轻量模式) and the full
+/// tree rebuilds: providers re-seed themselves from the still-alive services
+/// (queue, current track, lyrics re-fetch), and the static `AppRouter.router`
+/// still holds its route stack, so the user lands back on the page they left.
+/// Owned/flipped by `TrayController` (lib/shell/tray_controller.dart).
+final ValueNotifier<bool> lightweightMode = ValueNotifier<bool>(false);
+
+/// The entire UI while 轻量模式 is active. The window is hidden anyway — this
+/// exists only so the engine has a (near-free) widget tree to host.
+class _LightweightPlaceholder extends StatelessWidget {
+  const _LightweightPlaceholder();
+
+  @override
+  Widget build(BuildContext context) =>
+      const ColoredBox(color: Color(0xFF000000), child: SizedBox.expand());
+}
+
 /// Root widget for the **desktop** client. Services are built in `main()` and
 /// injected here (same 15-arg wiring as mobile — the reused logic layer is
 /// identical). The four backends are multiplexed by [MusicApiRouter]; the
@@ -81,6 +108,19 @@ class WenListenerApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 轻量模式 root swap: see [lightweightMode]. The builder result below this
+    // point is the app's ONLY subtree, so flipping the notifier unmounts (and
+    // thus disposes) the whole provider/router/shell tree in one frame.
+    return ValueListenableBuilder<bool>(
+      valueListenable: lightweightMode,
+      builder: (BuildContext context, bool lightweight, _) {
+        if (lightweight) return const _LightweightPlaceholder();
+        return _buildFullTree();
+      },
+    );
+  }
+
+  Widget _buildFullTree() {
     return MultiProvider(
       providers: <SingleChildWidget>[
         // Plain services via Provider.value (UI reads, never rebuilds on them).

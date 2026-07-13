@@ -6,6 +6,17 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/play_url.dart';
 import '../models/song.dart';
+import 'resource_cache.dart' show kCacheMaxBytesDefault;
+
+/// What the window-close (✕) button does. Desktop-only preference backing the
+/// 关闭主界面时 settings row; the tray keeps playback controllable either way.
+enum CloseBehavior {
+  /// Really quit the app (destroy the window + tray icon).
+  exit,
+
+  /// Hide the window to the system tray; playback keeps running.
+  minimizeToTray,
+}
 
 /// The persisted user settings snapshot.
 class SettingsData {
@@ -18,16 +29,27 @@ class SettingsData {
   /// Preferred playback audio quality. Default 极高 ([AudioLevel.exhigh]).
   final AudioLevel audioQuality;
 
+  /// What ✕ does. Default 最小化到托盘 ([CloseBehavior.minimizeToTray]).
+  final CloseBehavior closeBehavior;
+
+  /// Disk-cache budget for covers/lyrics (`ResourceCache`), in bytes.
+  /// Default 512 MB ([kCacheMaxBytesDefault]).
+  final int cacheMaxBytes;
+
   const SettingsData({
     required this.source,
     required this.rhythmEnabled,
     this.audioQuality = AudioLevel.exhigh,
+    this.closeBehavior = CloseBehavior.minimizeToTray,
+    this.cacheMaxBytes = kCacheMaxBytesDefault,
   });
 
   static const SettingsData defaults = SettingsData(
     source: MusicSource.netease,
     rhythmEnabled: true,
     audioQuality: AudioLevel.exhigh,
+    closeBehavior: CloseBehavior.minimizeToTray,
+    cacheMaxBytes: kCacheMaxBytesDefault,
   );
 }
 
@@ -73,8 +95,26 @@ class SettingsStore {
           break;
         }
       }
+      CloseBehavior close = SettingsData.defaults.closeBehavior;
+      final String? cn = m['closeBehavior']?.toString();
+      for (final CloseBehavior c in CloseBehavior.values) {
+        if (c.name == cn) {
+          close = c;
+          break;
+        }
+      }
+      // Raw byte count; any positive int is accepted (choices may grow), else
+      // the 512 MB default.
+      final int cacheMax = (m['cacheMaxBytes'] is int &&
+              (m['cacheMaxBytes'] as int) > 0)
+          ? m['cacheMaxBytes'] as int
+          : SettingsData.defaults.cacheMaxBytes;
       return SettingsData(
-          source: source, rhythmEnabled: rhythm, audioQuality: quality);
+          source: source,
+          rhythmEnabled: rhythm,
+          audioQuality: quality,
+          closeBehavior: close,
+          cacheMaxBytes: cacheMax);
     } catch (e) {
       debugPrint('SettingsStore.load failed: $e');
       return SettingsData.defaults;
@@ -85,6 +125,8 @@ class SettingsStore {
     required MusicSource source,
     required bool rhythmEnabled,
     required AudioLevel audioQuality,
+    required CloseBehavior closeBehavior,
+    int cacheMaxBytes = kCacheMaxBytesDefault,
   }) async {
     try {
       final File file = await _file();
@@ -94,6 +136,8 @@ class SettingsStore {
           'source': source.name,
           'rhythmEnabled': rhythmEnabled,
           'audioQuality': audioQuality.name,
+          'closeBehavior': closeBehavior.name,
+          'cacheMaxBytes': cacheMaxBytes,
         }),
         flush: true,
       );

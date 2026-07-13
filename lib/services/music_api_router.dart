@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../models/lyric_line.dart';
@@ -8,6 +10,7 @@ import '../models/song.dart';
 import 'kuwo_api.dart';
 import 'local_music_api.dart';
 import 'music_api.dart';
+import 'resource_cache.dart';
 
 /// Multiplexes the music backends behind one [MusicApi]. The UI [source]
 /// (persisted; default Netease) selects the backend for **search / feeds /
@@ -48,7 +51,7 @@ class MusicApiRouter extends ChangeNotifier implements MusicApi {
       case MusicSource.kugou:
         return kugou;
       case MusicSource.kuwo:
-        return this.kuwo;
+        return kuwo;
       case MusicSource.local:
         return local;
     }
@@ -92,8 +95,28 @@ class MusicApiRouter extends ChangeNotifier implements MusicApi {
   Future<PlayUrl?> songUrl(Song song, {AudioLevel level = AudioLevel.exhigh}) =>
       _backendFor(song.source).songUrl(song, level: level);
 
+  /// Per-song lyric fetch with a transparent disk read-through ([ResourceCache],
+  /// keyed `source-id`). Semantics preserved EXACTLY for the caller
+  /// (`PlayerProvider`'s transient-failure retry):
+  ///  * backend throws → this still throws (nothing cached, retry/backoff intact);
+  ///  * successful EMPTY result (instrumental) → returned but NOT cached, so a
+  ///    later fetch can still re-confirm;
+  ///  * only successful, non-empty lyrics are written (fire-and-forget).
+  /// Local files are skipped — their sidecar `.lrc` is already a disk read.
   @override
-  Future<Lyrics> lyric(Song song) => _backendFor(song.source).lyric(song);
+  Future<Lyrics> lyric(Song song) async {
+    if (song.source == MusicSource.local) {
+      return _backendFor(song.source).lyric(song);
+    }
+    final Lyrics? cached =
+        await ResourceCache.instance.readLyrics(song.source, song.id);
+    if (cached != null) return cached;
+    final Lyrics fresh = await _backendFor(song.source).lyric(song);
+    if (fresh.lines.isNotEmpty) {
+      unawaited(ResourceCache.instance.writeLyrics(song.source, song.id, fresh));
+    }
+    return fresh;
+  }
 
   @override
   Future<List<Playlist>> personalizedPlaylists({int limit = 12}) =>
