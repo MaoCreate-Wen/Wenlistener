@@ -27,8 +27,14 @@
              Description="WenListener $(var.ProductVersion) Setup"
              Manufacturer="WenListener" />
 
-    <!-- Newer version replaces older in one step; block downgrades. -->
-    <MajorUpgrade DowngradeErrorMessage="A newer version of WenListener is already installed." />
+    <!-- Newer version replaces older in one step; block downgrades.
+         AllowSameVersionUpgrades: also let a rebuilt SAME-version MSI replace an
+         existing install in place, so a broken/stale install is never left
+         stranded when the version wasn't bumped (the ICE61 warning this raises is
+         suppressed in build_msi.ps1's light call). Bumping the pubspec version is
+         still the normal path; this is the belt-and-suspenders fallback. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of WenListener is already installed." />
 
     <MediaTemplate EmbedCab="yes" />
 

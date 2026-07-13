@@ -55,6 +55,28 @@ $Heat   = Join-Path $WixDir 'heat.exe'
 $Candle = Join-Path $WixDir 'candle.exe'
 $Light  = Join-Path $WixDir 'light.exe'
 
+# ---- 0a) Strip MSVC link by-products so they never bloat the MSI ------------
+# heat harvests EVERY file under Release; wenlistener_desktop.exp/.lib/.pdb are
+# linker artifacts the app never loads at runtime. flutter build regenerates them
+# each time, so deleting them here is harmless.
+Get-ChildItem $ReleaseDir -Include *.exp, *.lib, *.pdb -Recurse -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+
+# ---- 0b) Bundle the VC++ 2015-2022 runtime app-local -----------------------
+# A Flutter Windows RELEASE binary dynamically links the MSVC runtime. This dev
+# box has it (VS installed), but a CLEAN target machine without the "VC++ 2015-2022
+# Redistributable" would fail to start / show a white window. Copying the runtime
+# DLLs next to the exe (they get harvested into the MSI) makes the app self-contained.
+$CrtDlls = @('msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+foreach ($dll in $CrtDlls) {
+    $srcDll = Join-Path $env:SystemRoot "System32\$dll"
+    if (Test-Path $srcDll) {
+        Copy-Item $srcDll (Join-Path $ReleaseDir $dll) -Force
+    } else {
+        Write-Warning "VC++ runtime '$dll' not found in System32 - clean-machine installs may white-screen."
+    }
+}
+
 # ---- 1) Harvest the Release tree (regenerated every build) ------------------
 $HarvestWxs = Join-Path $ObjDir 'AppFiles.wxs'
 Write-Host "Harvesting $ReleaseDir ..."
@@ -80,7 +102,7 @@ if ($LASTEXITCODE -ne 0) { throw "candle.exe failed (exit $LASTEXITCODE)." }
 # ---- 3) Link ----------------------------------------------------------------
 $MsiPath = Join-Path $DistDir "WenListener-$Version-x64.msi"
 Write-Host 'Linking (light) ...'
-& $Light -nologo -ext WixUIExtension -cultures:en-us -spdb `
+& $Light -nologo -ext WixUIExtension -cultures:en-us -spdb -sice:ICE61 `
     -b $InstallerDir `
     -out $MsiPath `
     (Join-Path $ObjDir 'Product.wixobj') (Join-Path $ObjDir 'AppFiles.wixobj')
