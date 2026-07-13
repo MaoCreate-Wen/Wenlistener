@@ -14,6 +14,7 @@ import '../../state/search_provider.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_dimens.dart';
 import '../../theme/app_typography.dart';
+import '../../widgets/entrance.dart';
 import '../home/widgets/desktop_widgets.dart';
 
 /// Desktop **Search** page.
@@ -182,7 +183,8 @@ class _SearchPageState extends State<SearchPage> {
             ),
           ),
           const SizedBox(height: AppDimens.space16),
-          Wrap(
+          DownwardReveal(
+            wrap: true,
             spacing: AppDimens.space8,
             children: <Widget>[
               for (final SearchType t in _types)
@@ -279,7 +281,8 @@ class _SearchPageState extends State<SearchPage> {
             ],
           ),
           const SizedBox(height: AppDimens.space16),
-          Wrap(
+          DownwardReveal(
+            wrap: true,
             spacing: AppDimens.space8,
             runSpacing: AppDimens.space8,
             children: <Widget>[
@@ -369,7 +372,9 @@ class _SearchPageState extends State<SearchPage> {
         AppDimens.screenPadding,
         AppDimens.space48,
       ),
-      child: Wrap(
+      // 结果网格「向下展开」逐个落位（统一入场，见 widgets/entrance.dart）。
+      child: DownwardReveal(
+        wrap: true,
         spacing: AppDimens.space16,
         runSpacing: AppDimens.space20,
         children: cards,

@@ -20,6 +20,7 @@ import '../../state/player_provider.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_dimens.dart';
 import '../../theme/app_typography.dart';
+import '../../widgets/entrance.dart';
 import '../player/widgets/toggle_icon_button.dart';
 
 /// Shared **desktop** UI kit used by the playlist / settings / accounts / login
@@ -1285,19 +1286,10 @@ Future<T?> dkShowGlassMenu<T>(
         ],
       );
     },
+    // 「向下展开」：菜单锚定在触发器下方，从顶边纵向拉开（统一入场逻辑）。
     transitionBuilder:
-        (BuildContext ctx, Animation<double> anim, _, Widget child) {
-      final CurvedAnimation curved =
-          CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
-      return FadeTransition(
-        opacity: curved,
-        child: ScaleTransition(
-          scale: Tween<double>(begin: 0.96, end: 1).animate(curved),
-          alignment: Alignment.topLeft,
-          child: child,
-        ),
-      );
-    },
+        (BuildContext ctx, Animation<double> anim, _, Widget child) =>
+            dkVerticalMenuTransition(anim, child),
   );
 }
 

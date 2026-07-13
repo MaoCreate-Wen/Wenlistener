@@ -10,6 +10,7 @@ import '../../state/local_playlist_provider.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_dimens.dart';
 import '../../theme/app_typography.dart';
+import '../../widgets/entrance.dart';
 import '../home/widgets/desktop_widgets.dart';
 import '../settings/settings_dialog.dart';
 
@@ -160,7 +161,9 @@ class _LibraryPageState extends State<LibraryPage> {
         padding:
             const EdgeInsets.symmetric(horizontal: AppDimens.screenPadding),
         sliver: SliverToBoxAdapter(
-          child: Wrap(
+          // 卡片网格「向下展开」逐个落位（统一入场，见 widgets/entrance.dart）。
+          child: DownwardReveal(
+            wrap: true,
             spacing: AppDimens.space16,
             runSpacing: AppDimens.space20,
             children: children,

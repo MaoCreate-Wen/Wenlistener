@@ -11,6 +11,7 @@ import '../../state/qq_auth_provider.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_dimens.dart';
 import '../../theme/app_typography.dart';
+import '../../widgets/entrance.dart';
 import '../login/login_dialog.dart';
 import '../playlist/desktop_kit.dart';
 
@@ -23,16 +24,13 @@ class AccountsBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
-      children: const <Widget>[
+    // 源卡片自上而下「向下展开」逐张落位（统一入场，见 widgets/entrance.dart）。
+    return const DownwardReveal(
+      spacing: AppDimens.sectionGap,
+      children: <Widget>[
         _NeteaseCard(),
-        SizedBox(height: AppDimens.sectionGap),
         _QqCard(),
-        SizedBox(height: AppDimens.sectionGap),
         _KugouCard(),
-        SizedBox(height: AppDimens.sectionGap),
         _KuwoCard(),
       ],
     );
@@ -75,7 +73,8 @@ class _SourceCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: AppDimens.space16),
-          ...children,
+          // 账号行逐行「向下展开」落位（空态单项也走同一入场）。
+          DownwardReveal(children: children),
         ],
       ),
     );

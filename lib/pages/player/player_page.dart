@@ -21,6 +21,7 @@ import '../../theme/app_dimens.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/amll_icons.dart';
 import '../../widgets/artwork_image.dart';
+import '../../widgets/entrance.dart';
 import '../lyrics/widgets/lyrics_view.dart';
 import 'widgets/bouncing_track.dart';
 import 'widgets/media_button.dart';
@@ -655,7 +656,6 @@ class _MorePopupState extends State<_MorePopup> {
       pageBuilder: (BuildContext _, __, ___) => const SizedBox.shrink(),
       transitionBuilder: (BuildContext ctx, Animation<double> anim, _,
           Widget __) {
-        final double t = Curves.easeOutCubic.transform(anim.value);
         const double menuW = 208;
         final double left = math.min(
           anchor.right - menuW,
@@ -666,22 +666,19 @@ class _MorePopupState extends State<_MorePopup> {
             Positioned(
               left: math.max(8, left),
               top: anchor.bottom + 6,
-              child: Opacity(
-                opacity: anim.value,
-                child: Transform.scale(
-                  scale: 0.96 + 0.04 * t,
-                  alignment: Alignment.topRight,
-                  child: _MoreMenuPanel(
-                    width: menuW,
-                    onAddToPlaylist: () {
-                      Navigator.of(ctx).pop();
-                      _showAddToPlaylist(context, song);
-                    },
-                    onAddToLocalPlaylist: () {
-                      Navigator.of(ctx).pop();
-                      _showAddToLocalPlaylist(context, song);
-                    },
-                  ),
+              // 「向下展开」：菜单从顶边向下拉开（统一入场逻辑）。
+              child: dkVerticalMenuTransition(
+                anim,
+                _MoreMenuPanel(
+                  width: menuW,
+                  onAddToPlaylist: () {
+                    Navigator.of(ctx).pop();
+                    _showAddToPlaylist(context, song);
+                  },
+                  onAddToLocalPlaylist: () {
+                    Navigator.of(ctx).pop();
+                    _showAddToLocalPlaylist(context, song);
+                  },
                 ),
               ),
             ),

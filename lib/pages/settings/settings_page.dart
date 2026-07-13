@@ -10,6 +10,7 @@ import '../../state/settings_provider.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_dimens.dart';
 import '../../theme/app_typography.dart';
+import '../../widgets/entrance.dart';
 import '../player/widgets/toggle_icon_button.dart';
 import '../playlist/desktop_kit.dart';
 import 'account_section.dart';
@@ -26,9 +27,9 @@ class SettingsBody extends StatelessWidget {
     final MusicSource source =
         context.select<SettingsProvider, MusicSource>((SettingsProvider s) => s.source);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
+    // 分区自上而下「向下展开」逐个落位（统一入场，见 widgets/entrance.dart）。
+    return DownwardReveal(
+      spacing: AppDimens.sectionGap,
       children: <Widget>[
         // --- 音源 -----------------------------------------------------------
         const _SettingsSection(
@@ -36,7 +37,6 @@ class SettingsBody extends StatelessWidget {
           subtitle: '搜索、推荐与歌单跟随所选音源',
           child: _SourceSelector(),
         ),
-        const SizedBox(height: AppDimens.sectionGap),
 
         // --- 账号 -----------------------------------------------------------
         _SettingsSection(
@@ -44,7 +44,6 @@ class SettingsBody extends StatelessWidget {
           subtitle: '登录 ${dkSourceLabel(source)} 以解锁会员曲目与个人歌单',
           child: AccountSection(source: source),
         ),
-        const SizedBox(height: AppDimens.sectionGap),
 
         // --- 播放 -----------------------------------------------------------
         const _SettingsSection(
@@ -57,7 +56,6 @@ class SettingsBody extends StatelessWidget {
             ],
           ),
         ),
-        const SizedBox(height: AppDimens.sectionGap),
 
         // --- 显示 -----------------------------------------------------------
         const _SettingsSection(
@@ -70,7 +68,6 @@ class SettingsBody extends StatelessWidget {
             ],
           ),
         ),
-        const SizedBox(height: AppDimens.sectionGap),
 
         // --- 缓存 -----------------------------------------------------------
         const _SettingsSection(
@@ -84,7 +81,6 @@ class SettingsBody extends StatelessWidget {
             ],
           ),
         ),
-        const SizedBox(height: AppDimens.sectionGap),
 
         // --- 关于 -----------------------------------------------------------
         const _SettingsSection(
@@ -134,7 +130,8 @@ class _SourceSelector extends StatelessWidget {
   Widget build(BuildContext context) {
     final MusicSource active =
         context.select<SettingsProvider, MusicSource>((SettingsProvider s) => s.source);
-    return Wrap(
+    return DownwardReveal(
+      wrap: true,
       spacing: AppDimens.space12,
       runSpacing: AppDimens.space12,
       children: <Widget>[
