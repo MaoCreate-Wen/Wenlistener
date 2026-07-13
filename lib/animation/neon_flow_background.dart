@@ -533,20 +533,33 @@ const double _kMinFrameIntervalMs = 1000.0 / 30.0;
 /// its per-frame cost scales with pixel area (the "bigger window = worse"
 /// symptom). We render the whole field (the ≈40k-vertex `drawVertices`, the
 /// `ImageShader` sample, the dither `plus` pass and the brightness `modulate`)
-/// into an offscreen at `1/this` per axis — 3 → a NINTH of the pixels/shader
-/// work — then upscale with a single cheap bilinear blit. The field is inherently
-/// soft (a 32² box-blurred texture magnified across the whole screen and then
-/// bilinear-stretched), so even the 3× upscale is visually indistinguishable
-/// from a native-resolution render; the heavy inherent blur hides it entirely.
-const double _kFieldDownsample = 3.0;
+/// into an offscreen at `1/this` per axis, then upscale with a single cheap
+/// bilinear blit. The field is inherently soft (a 32² box-blurred texture
+/// magnified across the whole screen), so a moderate downscale is invisible.
+///
+/// **2.0, not the old 3.0.** At 3× the offscreen was so coarse that the bilinear
+/// UPSCALE — not the mesh — became the artefact: reconstructing the low-res grid
+/// puts a C¹ (derivative) discontinuity at every buffer-texel boundary, and along
+/// a diagonal colour band those folds line up into a faint Mach-band staircase
+/// that reads as "锯齿" once stretched 3–6× (worst at 1440p/4K). 2.0 maps each grid
+/// cell to ~2 output px so the fold period drops below the visible threshold. The
+/// mesh itself never aliased (it fills the frame with no silhouette edge — MSAA
+/// would buy nothing); this is purely a source-resolution fix. Desktop GPUs have
+/// the fill-rate to spare (the ≈4× offscreen pixels are still a rounding error).
+const double _kFieldDownsample = 2.0;
 
 /// Absolute ceiling on the offscreen field buffer's HEIGHT, so the per-frame
 /// mesh fill-rate stops scaling with the window/monitor at all: on a large or
 /// 4K-maximised window the effective downsample grows past [_kFieldDownsample]
-/// to keep the buffer ≤ this many rows (≈ 360p — far above the 32² source
-/// texture's information content). The full-resolution cost that remains is the
-/// single bilinear blit, which is one cheap textured quad.
-const double _kFieldMaxHeight = 360.0;
+/// to keep the buffer ≤ this many rows. Raised 360 → 720 alongside the
+/// [_kFieldDownsample] drop: 360 pinned the buffer at ~640×360 on ANY ≥1080p
+/// window (1080p→3×, 4K→6×), so the upscale staircase above was always present
+/// on desktop. At 720 the buffer is ~960×540 (1080p) / 1280×720 (1440p & 4K,
+/// capped), grid cells map to 2–3 output px, and the staircase disappears. The
+/// full-resolution cost that remains is still the single bilinear blit (one cheap
+/// textured quad, independent of the buffer size), and the cap keeps the offscreen
+/// fill CONSTANT above 1440p instead of growing with the monitor.
+const double _kFieldMaxHeight = 720.0;
 
 /// Time constant (ms) for the render-rate `u_volume` glide ([_renderVol]) — eases
 /// the reactive volume toward each new FFT target so the zoom/rotation glide
