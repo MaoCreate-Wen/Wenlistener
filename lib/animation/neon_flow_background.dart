@@ -121,9 +121,16 @@ class NeonFlowBackground extends StatefulWidget {
         depthColors,
       );
       if (tex == null) return;
+      // A concurrent `_maybeLoad` may have cached this url while our build was
+      // in flight. Overwriting would strand the already-cached image (never
+      // disposed → native leak); dispose our redundant duplicate instead. Safe
+      // because nothing has read the just-built `tex` yet.
+      if (cache.containsKey(url)) {
+        tex.dispose();
+        return;
+      }
       // Same bounded-cache discipline as `_maybeLoad` (FIFO eviction).
-      if (!cache.containsKey(url) &&
-          cache.length >= _NeonFlowBackgroundState._kTexCacheCap) {
+      if (cache.length >= _NeonFlowBackgroundState._kTexCacheCap) {
         cache.remove(cache.keys.first);
       }
       cache[url] = tex;
@@ -142,6 +149,11 @@ class NeonFlowBackground extends StatefulWidget {
       tex.dispose();
     }
     _NeonFlowBackgroundState._texCache.clear();
+    // Also drop the far heavier mesh geometry (~1.3MB/preset, up to ~10MB of
+    // typed arrays) — it survives navigation and was previously left resident by
+    // this hook. Immutable and re-derivable via [_meshFor] on the next open, so
+    // only the same 'call while no field is mounted' discipline applies.
+    _NeonFlowBackgroundState._meshGeoCache.clear();
   }
 
   @override
@@ -217,7 +229,12 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
   /// number of layers/albums share one instance safely.
   static final Map<ControlPointPreset, BhpMesh> _meshGeoCache =
       <ControlPointPreset, BhpMesh>{};
-  static const int _kMeshGeoCap = 12;
+  // 12 → 8: keeps all 6 curated presets hot plus a little generated-grid
+  // headroom, while trimming ~5MB (~1.3MB/preset) off the worst-case resident
+  // typed-array footprint. A miss only re-runs [BhpMesh.fromPreset] (already
+  // cold-open tolerated). If song-change jank appears on generated-grid-heavy
+  // sessions, this is the knob to raise back toward 12.
+  static const int _kMeshGeoCap = 8;
 
   BhpMesh _meshFor(ControlPointPreset preset, int subs) {
     final BhpMesh? cached = _meshGeoCache[preset];
@@ -430,12 +447,21 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
     _buildTextureForUrl(url, widget.colors).then((ui.Image? tex) {
       if (!mounted || tex == null) return;
       if (widget.imageUrl != url) return; // track changed while decoding
+      // A concurrent prewarm/re-entrant load may have cached this url during our
+      // decode. Reuse the cached image and dispose our redundant duplicate,
+      // rather than overwriting-and-orphaning the cached one (a stranded ui.Image
+      // that would leak native memory until GC).
+      final ui.Image? raced = _texCache[url];
+      if (raced != null) {
+        tex.dispose();
+        _pushLayer(raced, url);
+        return;
+      }
       // Bound the cache so a long session can't accumulate ui.Images unbounded.
-      // Evict the OLDEST url (never the just-added one). Dropping the map ref is
-      // safe even if a live layer still holds that image — the layer's own
-      // reference keeps it valid, so this can never use-after-dispose, and GC
-      // reclaims the rest.
-      if (!_texCache.containsKey(url) && _texCache.length >= _kTexCacheCap) {
+      // Evict the OLDEST url. Dropping the map ref is safe even if a live layer
+      // still holds that image — the layer's own reference keeps it valid, so
+      // this can never use-after-dispose, and GC reclaims the rest.
+      if (_texCache.length >= _kTexCacheCap) {
         _texCache.remove(_texCache.keys.first);
       }
       _texCache[url] = tex;
@@ -525,7 +551,15 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
       );
       stream.addListener(listener);
       final ui.Image cover = await completer.future;
-      return await buildAlbumTexture(cover, depthColors: depthColors);
+      // [buildAlbumTexture] consumes `cover` synchronously (drawImageRect) before
+      // its first await, so the resolved 128² handle is dead weight afterwards.
+      // Each resolve() yields a fresh clone, so disposing this one only decrements
+      // the imageCache-shared handle instead of parking it in the live-image set.
+      try {
+        return await buildAlbumTexture(cover, depthColors: depthColors);
+      } finally {
+        cover.dispose();
+      }
     } catch (e) {
       debugPrint('NeonFlowBackground texture build failed: $e');
       return null;
@@ -669,17 +703,22 @@ class MeshLayer {
   Float32List? _posScreen;
   double _colorsForAlpha = -1;
 
-  /// The mirrored-repeat texture shader — built once per layer, not per frame.
-  late final ui.ImageShader shader = ui.ImageShader(
-    texture,
-    TileMode.mirror,
-    TileMode.mirror,
-    _kIdentity,
-    filterQuality: FilterQuality.low,
-  );
+  /// The mirrored-repeat texture shader — built lazily once per layer (on first
+  /// paint), not per frame. Nullable-backed so a layer disposed before it ever
+  /// painted does not force-build a shader just to free it, and so [dispose] can
+  /// deterministically release the native handle (see [dispose]).
+  ui.ImageShader? _shader;
+  ui.ImageShader get shader => _shader ??= ui.ImageShader(
+        texture,
+        TileMode.mirror,
+        TileMode.mirror,
+        _kIdentity,
+        filterQuality: FilterQuality.low,
+      );
 
-  /// The layer's drawVertices Paint — built once per layer, not per frame.
-  late final Paint paint = Paint()..shader = shader;
+  /// The layer's drawVertices Paint — built lazily once per layer, not per frame.
+  Paint? _paint;
+  Paint get paint => _paint ??= (Paint()..shader = shader);
 
   /// Maps the clip-space mesh positions to screen pixels for [size], applying the
   /// AMLL aspect overscan (`aspect>1 → y*=aspect; else x/=aspect`) + a small
@@ -741,8 +780,17 @@ class MeshLayer {
   }
 
   /// Drops this layer. The [texture] is **owned by the URL cache**, not the
-  /// layer, so nothing is disposed here (a re-opened track reuses the texture).
-  void dispose() {}
+  /// layer, so it is left alone (a re-opened track reuses the texture). But the
+  /// per-layer [ui.ImageShader] IS owned by this layer and must be released
+  /// deterministically — leaving it to the GC finalizer strands one native Skia
+  /// shader per album change / page re-open (the primary native-memory creep on
+  /// the now-playing surface). The nullable guard skips build-then-free for a
+  /// layer disposed before it ever painted, and makes double-dispose a no-op.
+  void dispose() {
+    _shader?.dispose();
+    _shader = null;
+    _paint = null;
+  }
 }
 
 double _easeInOutSine(double x) => -(math.cos(math.pi * x) - 1) / 2;

@@ -11,6 +11,7 @@ import '../../models/local_playlist.dart';
 import '../../models/playlist.dart';
 import '../../models/song.dart';
 import '../../router/routes.dart';
+import '../../services/mem_probe.dart';
 import '../../shell/window_drag_region.dart';
 import '../../state/library_provider.dart';
 import '../../state/local_playlist_provider.dart';
@@ -126,6 +127,7 @@ class _PlayerPageState extends State<PlayerPage> {
 
   @override
   void dispose() {
+    MemProbe.instance.mark('player.dispose (→home)');
     _detachEntranceListener();
     // The page owns the shell-facing surface signal — clear it when the route
     // is disposed. Post-frame: dispose can run inside the frame's tree

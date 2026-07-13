@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../animation/neon_flow_background.dart';
 import '../../router/routes.dart';
 import '../../services/fft_service.dart';
+import '../../services/mem_probe.dart';
 import '../../shell/window_drag_region.dart';
 import '../../state/player_provider.dart';
 import '../../state/settings_provider.dart';
@@ -34,9 +35,15 @@ class _LyricsPageState extends State<LyricsPage> {
   FftService? _fft;
   bool _fftRunning = false;
 
+  bool _openMarked = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (!_openMarked) {
+      _openMarked = true;
+      MemProbe.instance.mark('lyrics.open');
+    }
     _fft ??= context.read<FftService>();
     if (!_fftRunning && context.read<SettingsProvider>().rhythmEnabled) {
       _fft!.start();
@@ -46,7 +53,18 @@ class _LyricsPageState extends State<LyricsPage> {
 
   @override
   void dispose() {
+    MemProbe.instance.mark('lyrics.dispose (→home)');
     if (_fftRunning) _fft?.stop();
+    // After the pop settles, un-pin live images so the 64MB imageCache cap can
+    // reclaim the /lyrics-only large decodes (the 640² header cover, the mesh/
+    // palette analysis clones) that no longer have a painting listener. This is
+    // deliberately clearLiveImages() (un-pin), NOT clear() (evict): still-mounted
+    // Home covers get re-pinned on their very next paint frame as Home uncovers,
+    // so returning home shows no re-decode flicker. Scheduled post-frame so it
+    // doesn't fight the concurrent-raster pop window.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      PaintingBinding.instance.imageCache.clearLiveImages();
+    });
     super.dispose();
   }
 

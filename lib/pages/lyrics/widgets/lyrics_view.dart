@@ -8,6 +8,7 @@ import '../../../animation/interlude_dots.dart';
 import '../../../animation/lyric_line_render.dart';
 import '../../../animation/lyric_player_controller.dart';
 import '../../../models/lyric_line.dart';
+import '../../../models/song.dart';
 import '../../../state/player_provider.dart';
 import '../../../theme/app_colors.dart';
 import '../../../theme/app_dimens.dart';
@@ -282,7 +283,7 @@ class _LyricsViewState extends State<LyricsView>
   static const int _kHeightCacheCap = 32;
 
   List<double> _measureHeightsCached(double maxWidth) {
-    final dynamic song = _provider?.currentSong;
+    final Song? song = _provider?.currentSong;
     if (song == null || _lines.isEmpty) return _measureHeights(maxWidth);
     final double fs = _resolvedMainFontSize ?? 30;
     final String key = '${song.source.name}-${song.id}-'

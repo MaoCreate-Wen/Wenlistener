@@ -92,40 +92,48 @@ class ArtworkPalette {
           DiskCachedImage(url, headers: kNeteaseImageHeaders),
         ),
       );
-      final ByteData? bytes =
-          await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-      if (bytes == null) return PaletteResult.fallback;
+      // Free the 128² analysis handle on every exit path (early return, success,
+      // or a throw caught below) instead of leaving it live-but-unreferenced in
+      // the imageCache until LRU/GC. `image.width/height` are read below before
+      // the finally runs, so this is safe.
+      try {
+        final ByteData? bytes =
+            await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+        if (bytes == null) return PaletteResult.fallback;
 
-      // Median-cut quantize on a background isolate. fromByteData is documented
-      // isolate-safe (it never touches `dart:ui`), and PaletteGenerator/
-      // PaletteColor/PaletteTarget all use value equality, so the result safely
-      // copies back across the isolate boundary (vibrant/dominant lookups still
-      // resolve after the round trip).
-      final PaletteGenerator gen = await compute(
-        _quantizePalette,
-        EncodedImage(bytes, width: image.width, height: image.height),
-      );
+        // Median-cut quantize on a background isolate. fromByteData is documented
+        // isolate-safe (it never touches `dart:ui`), and PaletteGenerator/
+        // PaletteColor/PaletteTarget all use value equality, so the result safely
+        // copies back across the isolate boundary (vibrant/dominant lookups still
+        // resolve after the round trip).
+        final PaletteGenerator gen = await compute(
+          _quantizePalette,
+          EncodedImage(bytes, width: image.width, height: image.height),
+        );
 
-      // ---- map PaletteGenerator -> PaletteResult (derivation unchanged) ----
-      List<Color> colors = await computeImageColors(gen);
-      if (colors.isEmpty) {
-        final Color? fb = gen.vibrantColor?.color ?? gen.dominantColor?.color;
-        if (fb == null) return PaletteResult.fallback;
-        colors = <Color>[fb, AppColors.seedDeep];
+        // ---- map PaletteGenerator -> PaletteResult (derivation unchanged) ----
+        List<Color> colors = await computeImageColors(gen);
+        if (colors.isEmpty) {
+          final Color? fb = gen.vibrantColor?.color ?? gen.dominantColor?.color;
+          if (fb == null) return PaletteResult.fallback;
+          colors = <Color>[fb, AppColors.seedDeep];
+        }
+        // Keep the true dominant as the accent, then (only for covers dominated by
+        // a single hue) append synthetic depth colours so the mesh-gradient
+        // background has more than one hue to flow between — see [_enrichForDepth].
+        // Colourful covers pass through unchanged, and the dominant stays at index 0.
+        final Color accent = colors.first;
+        final List<Color> enriched = _enrichForDepth(colors);
+        final PaletteResult result = PaletteResult(
+          accent: accent,
+          colors: enriched,
+          gradient: _gradientOf(enriched),
+        );
+        _store(url, result);
+        return result;
+      } finally {
+        image.dispose();
       }
-      // Keep the true dominant as the accent, then (only for covers dominated by a
-      // single hue) append synthetic depth colours so the mesh-gradient background
-      // has more than one hue to flow between — see [_enrichForDepth]. Colourful
-      // covers pass through unchanged, and the dominant stays at index 0.
-      final Color accent = colors.first;
-      final List<Color> enriched = _enrichForDepth(colors);
-      final PaletteResult result = PaletteResult(
-        accent: accent,
-        colors: enriched,
-        gradient: _gradientOf(enriched),
-      );
-      _store(url, result);
-      return result;
     } catch (e) {
       // Any failure (decode error, timeout, empty bytes, isolate error) must
       // degrade gracefully — never throw, or it would crash the song switch.

@@ -1,11 +1,15 @@
 import 'dart:io' show Platform;
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app.dart';
+import 'router/app_router.dart';
+import 'router/routes.dart';
 import 'services/artwork_palette.dart';
 import 'services/audio_service.dart';
 import 'services/cookie_store.dart';
@@ -14,6 +18,7 @@ import 'services/fft_service.dart';
 import 'services/kugou_api.dart';
 import 'services/kuwo_api.dart';
 import 'services/kuwo_cookie_store.dart';
+import 'services/mem_probe.dart';
 import 'services/music_api_router.dart';
 import 'services/netease_api.dart';
 import 'services/netease_crypto.dart';
@@ -36,6 +41,11 @@ import 'state/settings_provider.dart';
 ///  - `FftService` is constructed but inert on Windows — its native Visualizer
 ///    `EventChannel` is Android-only, so `start()` self-guards to the `< 0`
 ///    sentinel and the lyrics background falls back to its synthetic pulse.
+/// Debug memory-profiling switch. `false` = normal app; `true` = enable the
+/// [MemProbe] trace + the home→player→lyrics→home auto-driver in [main]. Only
+/// has any effect in debug builds. Leave `false` for normal use.
+const bool _kMemProfiling = false;
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -47,6 +57,12 @@ Future<void> main() async {
   // measured as the #1 driver of the 400-500 MB lyrics-page working set) is now evicted quickly
   // instead of parking ~150 MB in the working set for the rest of the session.
   PaintingBinding.instance.imageCache.maximumSizeBytes = 64 << 20;
+
+  // DEBUG memory profiling — OFF by default. Flip [_kMemProfiling] to true to
+  // (a) stream a working-set + imageCache trace via [MemProbe] and (b) auto-drive
+  // home→player→lyrics→home so the trace captures the navigation peaks with no
+  // mouse input. Both are additionally kDebugMode-guarded (fully out of release).
+  if (_kMemProfiling) MemProbe.instance.start();
 
   // (A) DESKTOP WINDOW — frameless, min 1024x680, centered, shown BEFORE runApp.
   // window_manager's APIs throw on non-desktop platforms, so this is guarded to
@@ -166,4 +182,33 @@ Future<void> main() async {
       settings: settingsProvider,
     ),
   );
+
+  _debugAutoDriveMemProbe();
+}
+
+/// DEBUG-only profiling driver. With NO mouse input, cycles
+/// home→player→lyrics→home a few times so [MemProbe] captures the navigation
+/// memory peaks the user reports (opening the heavy now-playing surface, and
+/// returning home). Relies on a restored/paused session so `/player` has a song.
+/// Compiled out of release; remove once profiling is done.
+Future<void> _debugAutoDriveMemProbe() async {
+  if (!kDebugMode || !_kMemProfiling) return;
+  final GoRouter r = AppRouter.router;
+  await Future<void>.delayed(const Duration(seconds: 8)); // let restore settle
+  MemProbe.instance.mark('drive.begin (baseline=home)');
+  for (int i = 0; i < 3; i++) {
+    MemProbe.instance.mark('drive[$i].open.player');
+    r.push(Routes.player);
+    await Future<void>.delayed(const Duration(seconds: 5));
+    MemProbe.instance.mark('drive[$i].open.lyrics');
+    r.push(Routes.lyrics);
+    await Future<void>.delayed(const Duration(seconds: 5));
+    MemProbe.instance.mark('drive[$i].pop.lyrics(->player)');
+    r.pop();
+    await Future<void>.delayed(const Duration(seconds: 3));
+    MemProbe.instance.mark('drive[$i].pop.player(->home)');
+    r.pop();
+    await Future<void>.delayed(const Duration(seconds: 5));
+  }
+  MemProbe.instance.mark('drive.done (settled=home)');
 }

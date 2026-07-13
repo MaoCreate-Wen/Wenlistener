@@ -96,7 +96,9 @@ Future<ui.Image> buildAlbumTexture(
     ui.Rect.fromLTWH(0, 0, nd, nd),
     ui.Paint()..filterQuality = ui.FilterQuality.low,
   );
-  final ui.Image small = await recorder.endRecording().toImage(n, n);
+  final ui.Picture pic = recorder.endRecording();
+  final ui.Image small = await pic.toImage(n, n);
+  pic.dispose();
   final ByteData? bd =
       await small.toByteData(format: ui.ImageByteFormat.rawRgba);
   small.dispose();
