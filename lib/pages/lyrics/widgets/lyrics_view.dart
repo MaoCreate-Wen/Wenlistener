@@ -126,11 +126,11 @@ class _LyricsViewState extends State<LyricsView>
     _staticKeys = List<_StaticLineKey?>.filled(_lines.length, null);
   }
 
-  // Vertical padding above/below each line (half the inter-line gap). 22 gives
-  // the roomier AMLL-like air between lines (was 14, which read cramped once the
-  // per-word float rise was enlarged); [_measureHeights] adds `2 ×` this to every
-  // measured line height, so the controller's Y accumulator stays exact.
-  static const double _lineVPadding = 22;
+  // Vertical padding above/below each line (half the inter-line gap).
+  // [_measureHeights] adds `2 ×` this to every measured line height, so the
+  // controller's Y accumulator stays exact. Unified to 18 (was 22) for a tighter,
+  // consistent inter-line gap across all sources.
+  static const double _lineVPadding = 18;
 
   // B2 — the live, viewport-scaled main-line font size (AMLL `core/index.css:14`
   // `max(max(5vh,2.5vw),12px)`), recomputed every build from the window size so
