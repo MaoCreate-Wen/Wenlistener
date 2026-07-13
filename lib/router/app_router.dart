@@ -67,10 +67,15 @@ class AppRouter {
         key: state.pageKey,
         opaque: true,
         barrierColor: Colors.transparent,
-        // Matched push/pop windows (~420ms) give the Hero cover flight room to
-        // settle at both ends; the flight duration tracks this route transition.
-        transitionDuration: const Duration(milliseconds: 420),
-        reverseTransitionDuration: const Duration(milliseconds: 380),
+        // Matched push/pop windows give the Hero cover flight room to settle at
+        // both ends; the flight duration tracks this route transition. Shortened
+        // 420/380 → 300/240: the player open/close is a frequent op and both
+        // pages raster concurrently for the whole window (+ the mesh field's
+        // per-frame offscreen churns through it), so a tighter window directly
+        // cuts the transition's memory high-water and CPU cost; easeOutCubic@300
+        // still reads as a deliberate sheet.
+        transitionDuration: const Duration(milliseconds: 300),
+        reverseTransitionDuration: const Duration(milliseconds: 240),
         transitionsBuilder: _sheetTransition,
         child: child,
       );

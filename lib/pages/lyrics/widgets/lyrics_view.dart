@@ -90,6 +90,16 @@ class _LyricsViewState extends State<LyricsView>
   PlayerProvider? _provider;
   bool _subscribed = false;
 
+  // The host route, watched so the lyric emit loop can FREEZE while the surface
+  // is being popped (the 240ms close transition shrinks + fades the whole panel,
+  // so rebuilding the karaoke stack / 40k-vertex singing line every frame is
+  // pure waste — a top driver of the player→home CPU peak).
+  ModalRoute<dynamic>? _route;
+  void _onRouteStatus(AnimationStatus status) {
+    _controller.frozen = status == AnimationStatus.reverse ||
+        status == AnimationStatus.dismissed;
+  }
+
   List<LyricLine> _lines = const <LyricLine>[];
   double _lastPosMs = 0;
 
@@ -188,6 +198,13 @@ class _LyricsViewState extends State<LyricsView>
       // fetch if we landed with no lines (no-op if lyrics are present/settled).
       if (_lines.isEmpty) _provider!.retryLyrics();
     }
+    // (Re)bind the route-pop freeze listener.
+    final ModalRoute<dynamic>? route = ModalRoute.of(context);
+    if (!identical(route, _route)) {
+      _route?.animation?.removeStatusListener(_onRouteStatus);
+      _route = route;
+      _route?.animation?.addStatusListener(_onRouteStatus);
+    }
   }
 
   void _onProvider() {
@@ -229,6 +246,7 @@ class _LyricsViewState extends State<LyricsView>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _route?.animation?.removeStatusListener(_onRouteStatus);
     _provider?.removeListener(_onProvider);
     _controller.dispose();
     super.dispose();
@@ -244,12 +262,39 @@ class _LyricsViewState extends State<LyricsView>
     _syncedLines = _lines;
 
     final double textWidth = size.width - _padL - _padR;
-    final List<double> heights = _measureHeights(textWidth);
+    final List<double> heights = _measureHeightsCached(textWidth);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _controller.setLineHeights(heights);
       _controller.resize(size);
     });
+  }
+
+  // Process-level cache of measured line heights. `/player` is a push/pop route
+  // so `_LyricsViewState` is re-created (and its `_syncedSize`/`_syncedLines` memo
+  // lost) on EVERY open — without this, re-opening a song re-ran 200-400 synchronous
+  // TextPainter layouts (~one per line, plus per-word for karaoke lines + a second
+  // painter per translation) on the fade-in frame, a top contributor to the open
+  // CPU spike. Heights depend only on (lyrics, textWidth, fontSize) — all
+  // pixel-independent — so key by song + quantized width + font and reuse.
+  static final Map<String, List<double>> _heightCache =
+      <String, List<double>>{};
+  static const int _kHeightCacheCap = 32;
+
+  List<double> _measureHeightsCached(double maxWidth) {
+    final dynamic song = _provider?.currentSong;
+    if (song == null || _lines.isEmpty) return _measureHeights(maxWidth);
+    final double fs = _resolvedMainFontSize ?? 30;
+    final String key = '${song.source.name}-${song.id}-'
+        '${fs.round()}-${(maxWidth / 4).round()}';
+    final List<double>? cached = _heightCache[key];
+    if (cached != null && cached.length == _lines.length) return cached;
+    final List<double> heights = _measureHeights(maxWidth);
+    if (_heightCache.length >= _kHeightCacheCap) {
+      _heightCache.remove(_heightCache.keys.first);
+    }
+    _heightCache[key] = heights;
+    return heights;
   }
 
   List<double> _measureHeights(double maxWidth) {

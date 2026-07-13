@@ -167,6 +167,19 @@ class LyricPlayerController extends ChangeNotifier {
   bool _seekPending = false;
   bool _forceEmit = false; // push at least one frame after a layout change
 
+  /// When true, [_onTick] keeps advancing the internal clock + springs but
+  /// SKIPS [_emit]/notifyListeners — so the (expensive) per-frame lyric-stack
+  /// rebuild is suppressed while the whole panel is off-screen or being torn
+  /// down. Set true by the host during a route-pop (the karaoke sweep is
+  /// invisible under the closing sheet); on unfreeze one emit is forced so the
+  /// panel reflects the advanced clock with no jump.
+  bool _frozen = false;
+  set frozen(bool v) {
+    if (_frozen == v) return;
+    _frozen = v;
+    if (!v) _forceEmit = true;
+  }
+
   // Manual user-scroll (drag to browse lyrics, then spring back after ~5s).
   // Mirrors AMLL `scrollOffset` / `scrollBoundary` / the 5s `scrolledHandler`.
   double _userScrollOffset = 0;
@@ -797,7 +810,7 @@ class LyricPlayerController extends ChangeNotifier {
     // Avoid rebuilding the line stack every frame once everything has settled
     // and playback is paused. While playing we always emit so the karaoke
     // sweep + emphasis stay live.
-    if (_playing || stillAnimating || _forceEmit) {
+    if (!_frozen && (_playing || stillAnimating || _forceEmit)) {
       _forceEmit = false;
       _emit();
     }

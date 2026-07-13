@@ -205,6 +205,31 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
   /// URLs with a [NeonFlowBackground.prewarm] build in flight (dedupe guard).
   static final Set<String> _prewarming = <String>{};
 
+  /// Process-wide cache of built [BhpMesh] geometry, keyed by control-point
+  /// preset (identity). The ~40k-vertex mesh is **album-independent** — it is
+  /// pure warped geometry (positions/uv/mask/indices); the album enters only via
+  /// [MeshLayer.texture]. So a fresh `BhpMesh.fromPreset` on every player open /
+  /// track change re-ran ~40k-vertex + 237k-index construction (~1.3MB typed
+  /// arrays, several ms on the UI thread, right on the sheet-push's first frame)
+  /// for geometry that's fully reusable. The 6 curated presets stay resident
+  /// (hit forever); the rare (~15%) generated grid is bounded by [_kMeshGeoCap]
+  /// FIFO so a long session can't accumulate. Immutable + read-only, so any
+  /// number of layers/albums share one instance safely.
+  static final Map<ControlPointPreset, BhpMesh> _meshGeoCache =
+      <ControlPointPreset, BhpMesh>{};
+  static const int _kMeshGeoCap = 12;
+
+  BhpMesh _meshFor(ControlPointPreset preset, int subs) {
+    final BhpMesh? cached = _meshGeoCache[preset];
+    if (cached != null) return cached;
+    final BhpMesh mesh = BhpMesh.fromPreset(preset, subs);
+    if (_meshGeoCache.length >= _kMeshGeoCap) {
+      _meshGeoCache.remove(_meshGeoCache.keys.first);
+    }
+    _meshGeoCache[preset] = mesh;
+    return mesh;
+  }
+
   /// Shared, content-independent dither tile (see paint()) — built once, reused
   /// by every instance. Tiled + added over the field it breaks 8-bit banding.
   static ui.ImageShader? _ditherShader;
@@ -430,7 +455,7 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
     // [_kSubdivisions] (255÷4 = 63 ≥ 50); a 6×6 generated grid keeps the full 50
     // (255÷5 = 51), so generated grids no longer facet.
     final int subs = math.min(_kSubdivisions, 255 ~/ (preset.width - 1));
-    final BhpMesh mesh = BhpMesh.fromPreset(preset, subs);
+    final BhpMesh mesh = _meshFor(preset, subs);
     setState(() {
       _layers.add(
         MeshLayer(texture: texture, mesh: mesh)..alpha = instant ? 1.0 : 0.0,

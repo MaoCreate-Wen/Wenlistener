@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../models/image_url.dart';
 import '../../../services/resource_cache.dart' show DiskCachedImage;
 import '../../../theme/app_colors.dart';
+import '../../../widgets/artwork_image.dart' show ArtworkImage;
 
 /// Self-contained album-art image for the player/lyrics surfaces (this agent owns
 /// `pages/player` + `pages/lyrics`, so it carries its own artwork widget rather
@@ -37,8 +38,20 @@ class PlayerArtwork extends StatelessWidget {
     } else {
       // Disk-cached (bounded LRU) replacement for the old CachedNetworkImage;
       // placeholder-until-frame + the 220ms fade-in match its behavior.
+      // Decode at DISPLAY size — PlayerArtwork is only used for small ListTile
+      // thumbnails (queue panel, add-to-playlist dialogs), never the Hero cover,
+      // so bucketing to ~64² instead of the native 25-36MB Netease decode saves
+      // hundreds of MB when a long queue paints its rows.
+      final int px = ArtworkImage.cachePxFor(
+        size,
+        MediaQuery.devicePixelRatioOf(context),
+      );
       image = Image(
-        image: DiskCachedImage(resolved, headers: kNeteaseImageHeaders),
+        image: ResizeImage.resizeIfNeeded(
+          px,
+          px,
+          DiskCachedImage(resolved, headers: kNeteaseImageHeaders),
+        ),
         width: size,
         height: size,
         fit: BoxFit.cover,

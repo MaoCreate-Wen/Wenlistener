@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 import '../../../models/image_url.dart';
 import '../../../models/song.dart';
 import '../../../services/resource_cache.dart' show DiskCachedImage;
+import '../../../widgets/artwork_image.dart' as aw;
 import '../../../state/player_provider.dart';
 import '../../../theme/app_colors.dart';
 import '../../../theme/app_dimens.dart';
@@ -152,8 +153,21 @@ class ArtworkImage extends StatelessWidget {
     } else {
       // Disk-cached (bounded LRU) replacement for the old CachedNetworkImage;
       // placeholder-until-frame + AppMotion.fast fade-in match its behavior.
+      // Decode at DISPLAY size (ResizeImage bucketing, same 64px buckets as
+      // widgets/ArtworkImage) — WITHOUT this a Netease cover decoded at its
+      // native 2000-3000px = 25-36MB RGBA, and the home/library/search grids
+      // (kept alive in the shell IndexedStack) pinned dozens of them in the live
+      // imageCache = a several-hundred-MB resident floor. Bucketed it's ~150-220KB.
+      final int px = aw.ArtworkImage.cachePxFor(
+        size,
+        MediaQuery.devicePixelRatioOf(context),
+      );
       img = Image(
-        image: DiskCachedImage(u, headers: _headersFor(u)),
+        image: ResizeImage.resizeIfNeeded(
+          px,
+          px,
+          DiskCachedImage(u, headers: _headersFor(u)),
+        ),
         width: size,
         height: size,
         fit: BoxFit.cover,
