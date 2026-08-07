@@ -28,12 +28,22 @@ class LyricsView extends StatefulWidget {
     this.translationStyle,
     this.showInterludeDots = true,
     this.onTapLine,
+    this.morph,
   });
 
   final EdgeInsets padding;
   final TextStyle? mainStyle;
   final TextStyle? translationStyle;
   final bool showInterludeDots;
+
+  /// The player↔lyrics morph clock (0=player, 1=lyrics). While it is strictly
+  /// between 0 and 1 the lyric lines render the CHEAP path — fixed scale (no
+  /// per-frame scale → no glyph-atlas thrash), no per-line Gaussian blur, no
+  /// karaoke additive-glow saveLayer / per-word ShaderMask — which is what makes
+  /// the ~280ms transition affordable (Impeller re-encodes the scene each frame,
+  /// so the lever is fewer paint ops, not layer caching). The live cascade/glow
+  /// resumes the instant the morph settles at t==1.
+  final Animation<double>? morph;
 
   /// Tapping a line; null → seek playback (and the lyric layout) to its start.
   final ValueChanged<int>? onTapLine;
@@ -69,6 +79,28 @@ class _LyricsViewState extends State<LyricsView>
   late final LyricPlayerController _controller =
       LyricPlayerController(vsync: this);
 
+  /// True while the player↔lyrics morph is strictly in flight (0<t<1). While
+  /// true the lyric lines render PLAINLY (fixed scale, no per-line Gaussian blur,
+  /// no karaoke additive-glow saveLayer / per-word ShaderMask) — Impeller
+  /// re-encodes the scene every frame, so the fix is to cut the paint ops, not
+  /// to cache: the animated per-line SCALE was thrashing the glyph atlas
+  /// (CreateGlyphAtlas every frame) and the blur/glow were full offscreens. The
+  /// live cascade/glow resumes the instant the morph settles at t==1.
+  bool get _morphing {
+    final double? m = widget.morph?.value;
+    return m != null && m > 0.001 && m < 0.999;
+  }
+
+  /// The whole-view morph fade, applied PER LINE (see LyricLineWidget.fadeAlpha)
+  /// so the host doesn't wrap LyricsView in a full-screen group Opacity (an
+  /// ~8.6ms Impeller saveLayer). Matches the old _AnimatedLayout lyricsAlpha ramp
+  /// (fades in over t∈[0.35,1]); 1.0 when there's no morph.
+  double get _fadeAlpha {
+    final double? m = widget.morph?.value;
+    if (m == null) return 1.0;
+    return ((m - 0.35) / 0.65).clamp(0.0, 1.0);
+  }
+
   PlayerProvider? _provider;
   bool _subscribed = false;
 
@@ -91,6 +123,17 @@ class _LyricsViewState extends State<LyricsView>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // When mounted-but-hidden in player mode (always-mount, per-line fade to 0)
+    // suppress the controller's per-frame rebuild — the springs keep advancing
+    // (ticker never stops, so no dt glitch) but the invisible stack isn't
+    // reflowed. Un-hidden the instant the morph starts.
+    widget.morph?.addListener(_onMorphActivity);
+    _onMorphActivity();
+  }
+
+  void _onMorphActivity() {
+    final double m = widget.morph?.value ?? 1.0;
+    _controller.setHidden(m <= 0.001);
   }
 
   @override
@@ -145,6 +188,7 @@ class _LyricsViewState extends State<LyricsView>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    widget.morph?.removeListener(_onMorphActivity);
     _provider?.removeListener(_onProvider);
     _controller.dispose();
     super.dispose();
@@ -168,7 +212,16 @@ class _LyricsViewState extends State<LyricsView>
     });
   }
 
+  /// Shared across every LyricsView mount: per-line band heights are a pure
+  /// function of (lyrics-list identity, text width). Once a song is measured at a
+  /// width, a re-open/re-mount skips the ~150 per-WORD `TextPainter.layout()`
+  /// calls that dominate the cold-mount spike.
+  static final Map<int, List<double>> _heightCache = <int, List<double>>{};
+
   List<double> _measureHeights(double maxWidth) {
+    final int cacheKey = Object.hash(identityHashCode(_lines), maxWidth.round());
+    final List<double>? cached = _heightCache[cacheKey];
+    if (cached != null) return cached;
     final List<double> out = <double>[];
     for (final LyricLine line in _lines) {
       // Word-by-word lines render as a `Wrap` of per-word boxes (KaraokeText),
@@ -197,6 +250,8 @@ class _LyricsViewState extends State<LyricsView>
       }
       out.add(h + _lineVPadding * 2);
     }
+    if (_heightCache.length > 48) _heightCache.clear(); // bound growth
+    _heightCache[cacheKey] = out;
     return out;
   }
 
@@ -236,37 +291,50 @@ class _LyricsViewState extends State<LyricsView>
 
   @override
   Widget build(BuildContext context) {
-    final PlayerProvider player = context.watch<PlayerProvider>();
+    // SELECT only the fields that GATE this view — NOT the whole provider, which
+    // notifies on every position tick. The live lyric animation is driven
+    // separately by [_onProvider] → [_controller], so this build now rebuilds
+    // only when a gate flips (load state / active line / accent), not every
+    // frame — removing a per-tick full-subtree rebuild that compounded jank.
+    final bool lyricsLoading = context
+        .select<PlayerProvider, bool>((PlayerProvider p) => p.lyricsLoading);
+    final bool lyricsSettled = context
+        .select<PlayerProvider, bool>((PlayerProvider p) => p.lyricsSettled);
     final bool reduceMotion = MediaQuery.of(context).disableAnimations;
 
     // Spinner only on the first-ever load (no lines to show yet); on a
     // song-to-song switch the previous lines stay on screen until the new ones
     // swap in (AMLL never flashes a loading state between tracks).
-    if (player.lyricsLoading && _lines.isEmpty) {
+    if (lyricsLoading && _lines.isEmpty) {
       return const Center(child: CircularProgressIndicator(strokeWidth: 2));
     }
     if (_lines.isEmpty) {
       // Not settled → a transient fetch failure is being retried; keep the
       // spinner rather than flash "No lyrics" for a track that may have them.
-      if (!player.lyricsSettled) {
+      if (!lyricsSettled) {
         return const Center(child: CircularProgressIndicator(strokeWidth: 2));
       }
       return _empty();
     }
     if (reduceMotion) {
+      final int activeIndex = context.select<PlayerProvider, int>(
+          (PlayerProvider p) => p.activeLyricIndex);
       return _StaticLyrics(
         lines: _lines,
-        activeIndex: player.activeLyricIndex,
+        activeIndex: activeIndex,
         mainStyle: _mainStyle,
         translationStyle: _translationStyle,
         padding: widget.padding,
         onSeek: _seekToLine,
       );
     }
-    return _animatedLyrics(player);
+    return _animatedLyrics(context);
   }
 
-  Widget _animatedLyrics(PlayerProvider player) {
+  Widget _animatedLyrics(BuildContext context) {
+    // Per-song accent for the interlude dots; changes rarely (not per tick).
+    final Color accent = context
+        .select<PlayerProvider, Color>((PlayerProvider p) => p.dynamicAccent);
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final Size size = Size(constraints.maxWidth, constraints.maxHeight);
@@ -302,8 +370,15 @@ class _LyricsViewState extends State<LyricsView>
                 return Stack(
                   children: <Widget>[
                     ..._lineWidgets(renders, singing, size.height),
-                    if (widget.showInterludeDots)
-                      ..._interlude(active, player.dynamicAccent),
+                    // Fade the interlude dots with the morph too (the whole-view
+                    // group Opacity that used to do this was removed to avoid a
+                    // full-screen saveLayer; the dots are a tiny region so their
+                    // own Opacity is cheap).
+                    if (widget.showInterludeDots && _fadeAlpha > 0)
+                      Opacity(
+                        opacity: _fadeAlpha,
+                        child: Stack(children: _interlude(active, accent)),
+                      ),
                   ],
                 );
               },
@@ -342,7 +417,13 @@ class _LyricsViewState extends State<LyricsView>
             mainStyle: _mainStyle,
             translationStyle: _translationStyle,
             wordFadeWidth: _controller.wordFadeWidth,
-            isActive: i == singing,
+            // While morphing, render the cheap flat path: no active-line
+            // additive-glow saveLayer / per-word ShaderMask, no per-line Gaussian
+            // blur offscreens, and a FIXED scale (the animated scale thrashed the
+            // glyph atlas). The live effects resume at t==1.
+            isActive: !_morphing && i == singing,
+            morphing: _morphing,
+            fadeAlpha: _fadeAlpha,
           ),
         ),
       );

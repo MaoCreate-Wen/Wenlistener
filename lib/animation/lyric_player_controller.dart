@@ -69,6 +69,22 @@ class LyricPlayerController extends ChangeNotifier {
     _ticker = vsync.createTicker(_onTick)..start();
   }
 
+  /// Suppress the per-frame [notifyListeners] rebuild while LyricsView is fully
+  /// hidden (player mode, morph≈0) WITHOUT ever stopping the [Ticker]. Stopping
+  /// the ticker breaks the frame delta (`Ticker.start()` restarts `elapsed` from
+  /// ~0, so the first resumed tick computes a huge negative `dt` that blows the
+  /// springs off-screen → the settled lyrics rendered blank). Instead the ticker
+  /// keeps advancing the springs/time every vsync (cheap UI-thread math, the
+  /// original proven behaviour) but we skip the rebuild of the invisible lyric
+  /// stack: no `_emit()` while hidden, so the ListenableBuilder doesn't reflow a
+  /// stack that paints nothing (fadeAlpha 0). Becoming visible emits at once so
+  /// the springs' current (already-correct) positions show immediately.
+  void setHidden(bool hidden) {
+    if (hidden == _hidden) return;
+    _hidden = hidden;
+    if (!hidden) _emit();
+  }
+
   // --- tunables (mirror AMLL setters) --------------------------------------
   double alignPosition = 0.35;
   double wordFadeWidth = 0.5;
@@ -108,6 +124,7 @@ class LyricPlayerController extends ChangeNotifier {
 
   late final Ticker _ticker;
   Duration _lastTick = Duration.zero;
+  bool _hidden = false;
 
   final List<_Line> _lines = <_Line>[];
   List<LyricLine> _source = const <LyricLine>[];
@@ -691,8 +708,11 @@ class LyricPlayerController extends ChangeNotifier {
 
     // Avoid rebuilding the line stack every frame once everything has settled
     // and playback is paused. While playing we always emit so the karaoke
-    // sweep + emphasis stay live.
-    if (_playing || stillAnimating || _forceEmit) {
+    // sweep + emphasis stay live. While the view is fully hidden (player mode)
+    // skip the rebuild entirely — the springs still advance above, but the
+    // invisible stack isn't reflowed; becoming visible ([setHidden] false)
+    // emits the current state at once.
+    if (!_hidden && (_playing || stillAnimating || _forceEmit)) {
       _forceEmit = false;
       _emit();
     }

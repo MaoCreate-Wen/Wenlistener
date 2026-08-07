@@ -21,6 +21,9 @@ class KuwoAuthProvider extends ChangeNotifier {
     required this.cookies,
     required this.router,
   }) {
+    // When a logged-in play resolves to the unauthorized stub, drop the session
+    // so the login prompt reappears.
+    api.onSessionExpired = _handleSessionExpired;
     unawaited(_init());
   }
 
@@ -90,6 +93,26 @@ class KuwoAuthProvider extends ChangeNotifier {
       _errorMsg = '登录错误：$e';
       notifyListeners();
       return false;
+    }
+  }
+
+  /// Handles an expired-session signal from [KuwoApi] (a logged-in play resolved
+  /// to the placeholder stub). Clears the dead session so [isLoggedIn] flips to
+  /// false — the settings account section then falls back to the login prompt.
+  /// Kuwo has no refresh token, so recovery is a full re-login. Debounced so a
+  /// burst of stub resolutions only fires one cycle.
+  bool _handlingExpiry = false;
+  Future<void> _handleSessionExpired() async {
+    if (_handlingExpiry || !cookies.isLoggedIn) return;
+    _handlingExpiry = true;
+    try {
+      await cookies.invalidateSession();
+      _step = KuwoLoginStep.idle;
+      _errorMsg = '登录已过期，请重新登录';
+      router.refresh();
+      notifyListeners();
+    } finally {
+      _handlingExpiry = false;
     }
   }
 

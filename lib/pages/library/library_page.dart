@@ -8,10 +8,11 @@ import '../../models/song.dart';
 import '../../router/routes.dart';
 import '../../state/auth_provider.dart';
 import '../../state/kugou_auth_provider.dart';
+import '../../state/kugougn_auth_provider.dart';
 import '../../state/library_provider.dart';
 import '../../state/local_playlist_provider.dart';
 import '../../state/player_provider.dart';
-import '../../state/qq_auth_provider.dart';
+import '../../state/qqcn_auth_provider.dart';
 import '../../state/settings_provider.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_dimens.dart';
@@ -256,8 +257,10 @@ class _LibraryPageState extends State<LibraryPage> {
   /// those providers, never touches them). Local has no account.
   _AccountView _accountFor(BuildContext context, MusicSource source) {
     switch (source) {
-      case MusicSource.migu: // QQ Music occupies the historical `migu` slot
-        final QqAuthProvider qq = context.watch<QqAuthProvider>();
+      case MusicSource.migu: // dormant web-QQ slot (not user-selectable)
+      case MusicSource.qqcn: // QQ 音乐 (Android) — the real selectable QQ source
+        final QqcnAuthProvider qq =
+            context.watch<QqcnAuthProvider>();
         return _AccountView(
           isLoggedIn: qq.isLoggedIn,
           avatarUrl: qq.account?.avatarUrl,
@@ -266,9 +269,9 @@ class _LibraryPageState extends State<LibraryPage> {
           fallbackName: 'QQ音乐用户',
           subtitle: '账号管理',
           loginTitle: '登录 QQ音乐',
-          loginSubtitle: '微信 / QQ 扫码登录',
+          loginSubtitle: 'QQ / 微信 扫码登录',
           loginRoute: Routes.qqLogin,
-          onSignOut: () => context.read<QqAuthProvider>().logout(),
+          onSignOut: () => context.read<QqcnAuthProvider>().logout(),
         );
       case MusicSource.kugou:
         final KugouAuthProvider kg = context.watch<KugouAuthProvider>();
@@ -288,6 +291,21 @@ class _LibraryPageState extends State<LibraryPage> {
               context.read<KugouAuthProvider>().removeAccount(id);
             }
           },
+        );
+      case MusicSource.kugougn:
+        // 概念版 is a separate source with its own SMS login (in settings).
+        final KugougnAuthProvider gn = context.watch<KugougnAuthProvider>();
+        return _AccountView(
+          isLoggedIn: gn.isLoggedIn,
+          avatarUrl: gn.active?.avatarUrl,
+          nickname: gn.active?.nickname,
+          isVip: gn.active?.isVip ?? false,
+          fallbackName: '概念版用户',
+          subtitle: '账号',
+          loginTitle: '登录酷狗概念版',
+          loginSubtitle: '手机号验证码登录',
+          loginRoute: Routes.settings,
+          onSignOut: () => context.read<KugougnAuthProvider>().logout(),
         );
       case MusicSource.kuwo:
         // Kuwo has no multi-account state yet — show anonymous/hint.

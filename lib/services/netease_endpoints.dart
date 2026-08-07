@@ -13,6 +13,10 @@ class NeteaseEndpoints {
   static const String downloadUrl = '/weapi/song/enhance/download/url';
   static const String qrUnikey = '/weapi/login/qrcode/unikey';
   static const String qrLogin = '/weapi/login/qrcode/client/login';
+  // Silent session renewal: the jar's MUSIC_R_T (refresh token) minted by the
+  // 803 QR login is carried automatically by the CookieManager; a 200 here
+  // Set-Cookies a fresh MUSIC_U, extending the session without a re-scan.
+  static const String tokenRefresh = '/weapi/login/token/refresh';
   static const String lyric = '/weapi/song/lyric';
   static const String account = '/weapi/w/nuser/account/get';
   static const String personalized = '/weapi/personalized/playlist';

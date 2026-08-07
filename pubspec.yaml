@@ -4,7 +4,7 @@ description: "WenListener — an Apple Music-style player for Migu and NetEase C
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 
-version: 1.9.2+28
+version: 1.18.0+51
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -42,12 +42,23 @@ dependencies:
   just_audio: ^0.9.46
   audio_service: ^0.18.19
 
+  # Windows desktop: just_audio's federated implementation (Windows Media
+  # Foundation backend). Only participates in `-d windows` builds; the Android
+  # build ignores it entirely (federated plugins pick their per-platform impl —
+  # Android keeps the built-in ExoPlayer backend). Matches just_audio ^0.9.46's
+  # platform-interface 4.6.0 (clean-resolves to just_audio_windows 0.2.3).
+  just_audio_windows: ^0.2.3
+
   # Runtime permissions: POST_NOTIFICATIONS on Android 13+ so the media
   # notification is allowed to show (reused later for RECORD_AUDIO).
   permission_handler: ^11.3.1
 
   # State.
   provider: ^6.1.2
+
+  # Desktop window sizing / min-size / centering / title (desktop-only; Android
+  # ignores it — window_manager APIs are guarded behind Platform.isWindows).
+  window_manager: ^0.5.2
 
   # Local-music import: pick audio files / a folder to scan (SAF-backed on
   # Android, so no broad storage permission is needed for user-picked files).

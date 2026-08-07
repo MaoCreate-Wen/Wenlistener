@@ -77,6 +77,18 @@ class AudioService with WidgetsBindingObserver {
   /// Wall-clock of the last throttled persist from the position stream.
   int _lastPersistMs = 0;
 
+  /// Fallback position heartbeat. just_audio_windows (Media Foundation) stops
+  /// emitting positionStream after a native track transition, freezing the
+  /// scrubber + lyric sweep until a real seek. This ticker POLLS the (still
+  /// wall-clock-interpolated) `_player.position` getter and re-emits a snapshot —
+  /// a pure read, never a seek, so it can't disturb a transition (unlike the
+  /// indexed re-prime seek that broke 'next').
+  Timer? _positionTicker;
+
+  /// Wall-clock of the last [_push]. Lets the ticker stay quiet while the native
+  /// positionStream is still delivering (no double-push in steady playback).
+  int _lastPushMs = 0;
+
   AudioService({
     required this.api,
     required AudioPlayer player,
@@ -143,9 +155,28 @@ class AudioService with WidgetsBindingObserver {
       // recovery after the current broadcast settles.
       scheduleMicrotask(() => unawaited(_onPlayerError()));
     });
+
+    // Fallback position heartbeat — MF withholds positionStream after a native
+    // track transition (next / previous / auto-advance / a tapped queue row's
+    // jumpTo), which would freeze the scrubber + lyric sweep until a real seek.
+    // This pure-read poll of the wall-clock-interpolated position getter re-arms
+    // the UI WITHOUT any seek, so it can't disturb a transition (a re-prime seek
+    // here forces a full indexed source re-load on MF and races the in-flight
+    // skip — it broke 'next'). It stays quiet whenever the native positionStream
+    // is still delivering (the 220ms coalesce guard) and while parked at the end
+    // of the queue (completed), so it adds no steady-state churn on Android.
+    _positionTicker = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      if (!_player.playing) return; // paused: nothing to advance
+      if (_player.processingState == ProcessingState.completed) return; // end of queue
+      if (_pendingStartPosition != null) return; // pre-restore: position is a stand-in
+      final int now = DateTime.now().millisecondsSinceEpoch;
+      if (now - _lastPushMs < 220) return; // positionStream still live → don't double-push
+      _push();
+    });
   }
 
   void _push() {
+    _lastPushMs = DateTime.now().millisecondsSinceEpoch;
     final ProcessingState ps = _player.processingState;
     _snapshots.add(PlaybackSnapshot(
       playing: _player.playing,
@@ -460,6 +491,7 @@ class AudioService with WidgetsBindingObserver {
 
   Future<void> dispose() async {
     WidgetsBinding.instance.removeObserver(this);
+    _positionTicker?.cancel();
     await _snapshots.close();
     await _indexController.close();
     await _errors.close();

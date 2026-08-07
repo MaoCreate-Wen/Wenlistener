@@ -30,7 +30,10 @@ class AppDimens {
   // Glass blur sigmas.
   static const double blurPanel = 24;
   static const double blurPlayerBg = 30;
-  static const double blurNav = 18;
+  // Kept moderate: blur cost scales super-linearly with sigma, and the nav/mini
+  // bars drop to a flat scrim while anything animates (see GlassMotion), so this
+  // only pays out on static frames.
+  static const double blurNav = 12;
 
   // Component heights / sizes.
   static const double miniPlayerHeight = 64;

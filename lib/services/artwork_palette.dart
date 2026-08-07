@@ -68,11 +68,29 @@ class ArtworkPalette {
     try {
       // The image *decode* must run on the root isolate (`dart:ui`), so resolve
       // and rasterize the cover here, then hand the raw RGBA bytes off-thread.
+      // Decode at 100² via ResizeImage — CachedNetworkImageProvider ignores the
+      // ImageConfiguration size hint, so without this the cover is decoded at
+      // full resolution (~4 MB RGBA) just to quantize. ResizeImage passes
+      // cacheWidth/Height to the codec for a real downsample; the median-cut is
+      // plenty accurate at 100². Cuts the decode + toByteData + isolate copy that
+      // fire on every song switch (including background auto-advance).
       final ui.Image image = await _resolveCoverImage(
-        CachedNetworkImageProvider(url, headers: kNeteaseImageHeaders),
+        ResizeImage(
+          CachedNetworkImageProvider(url, headers: kNeteaseImageHeaders),
+          width: 100,
+          height: 100,
+          allowUpscaling: false,
+        ),
       );
+      // Capture dims before releasing the handle.
+      final int imgW = image.width;
+      final int imgH = image.height;
       final ByteData? bytes =
           await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      // The ImageInfo.image handed to the stream listener is a clone we own; drop
+      // the native decode now we have the bytes, or one (downsampled) cover leaks
+      // per unique URL for the whole session.
+      image.dispose();
       if (bytes == null) return PaletteResult.fallback;
 
       // Median-cut quantize on a background isolate. fromByteData is documented
@@ -82,7 +100,7 @@ class ArtworkPalette {
       // resolve after the round trip).
       final PaletteGenerator gen = await compute(
         _quantizePalette,
-        EncodedImage(bytes, width: image.width, height: image.height),
+        EncodedImage(bytes, width: imgW, height: imgH),
       );
 
       // ---- map PaletteGenerator -> PaletteResult (derivation unchanged) ----

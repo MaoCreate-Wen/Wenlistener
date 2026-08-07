@@ -71,6 +71,16 @@ class KuwoCookieStore {
     await _persist();
   }
 
+  /// Drops the login session (userid/websid) but KEEPS the Hm cookie so
+  /// anonymous search / lyrics keep working. Called when the session is detected
+  /// as expired (anti.s hands back the placeholder stub for a logged-in request).
+  Future<void> invalidateSession() async {
+    if (_userid.isEmpty && _websid.isEmpty) return;
+    _userid = '';
+    _websid = '';
+    await _persist();
+  }
+
   Future<void> _persist() async {
     try {
       final File f = await _file();

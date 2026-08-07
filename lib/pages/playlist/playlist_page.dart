@@ -11,9 +11,14 @@ import '../../state/player_provider.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_dimens.dart';
 import '../../theme/app_typography.dart';
+import '../../widgets/playlist_search.dart';
 import '../../widgets/skeleton_box.dart';
 import '../../widgets/song_tile.dart';
 import 'widgets/playlist_header.dart';
+
+/// Must equal the [SliverAppBar.expandedHeight] below — the locate offset math
+/// treats the header as occupying `[0, _kExpandedAppBarHeight)` of scroll extent.
+const double _kExpandedAppBarHeight = 360;
 
 /// Playlist detail: a collapsing [SliverAppBar] header over a virtualized list
 /// of [SongTile] rows (numbered, with the active track highlighted). Loads the
@@ -40,10 +45,27 @@ class _PlaylistPageState extends State<PlaylistPage> {
   /// detail) doesn't blank the page back to a skeleton.
   Playlist? _retained;
 
+  /// In-playlist search state (all LOCAL — so typing rebuilds the page but a
+  /// track switch never does, preserving the 切歌卡顿 perf rule).
+  bool _searchActive = false;
+  String _query = '';
+  final TextEditingController _searchController = TextEditingController();
+
+  /// Drives the "定位/locate" scroll-to-current-song (attached to the
+  /// CustomScrollView so offset math + the on-screen check work).
+  final ScrollController _scrollController = ScrollController();
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _scrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -85,6 +107,62 @@ class _PlaylistPageState extends State<PlaylistPage> {
 
   void _playFrom(List<Song> tracks, int index) {
     context.read<PlayerProvider>().playQueue(tracks, index: index);
+  }
+
+  void _toggleSearch() {
+    setState(() {
+      _searchActive = !_searchActive;
+      if (!_searchActive) {
+        _query = '';
+        _searchController.clear();
+        FocusManager.instance.primaryFocus?.unfocus();
+      }
+    });
+  }
+
+  void _onQueryChanged(String value) => setState(() => _query = value);
+
+  /// Original-index list of tracks matching the current query. Empty query →
+  /// every index in order. Returns INDICES (not Songs) so a tapped result maps
+  /// back to its real position in [tracks] — the full playlist stays the queue,
+  /// and duplicate songs stay disambiguated.
+  List<int> _matches(List<Song> tracks) {
+    final String q = _query.trim();
+    if (q.isEmpty) return List<int>.generate(tracks.length, (int i) => i);
+    return <int>[
+      for (int i = 0; i < tracks.length; i++)
+        if (songMatchesQuery(tracks[i], q)) i,
+    ];
+  }
+
+  /// Scrolls the list so the currently-playing track (of THIS playlist) lands
+  /// just below the collapsed app bar. Reads [PlayerProvider] via `read` (on tap
+  /// only) so build() never watches it. Offset is exact because rows are a fixed
+  /// [kPlaylistRowExtent] and the pinned app bar collapses to `padding.top +
+  /// kToolbarHeight`.
+  void _locateCurrent(List<Song> tracks) {
+    final Object? id = context.read<PlayerProvider>().currentSong?.id;
+    final int index =
+        id == null ? -1 : tracks.indexWhere((Song s) => s.id == id);
+    if (index < 0) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('当前播放的歌曲不在此歌单')),
+        );
+      return;
+    }
+    final double collapsed = MediaQuery.of(context).padding.top + kToolbarHeight;
+    final double target = (_kExpandedAppBarHeight +
+            index * kPlaylistRowExtent -
+            collapsed -
+            kPlaylistRowExtent) // one row of breathing room above
+        .clamp(0.0, _scrollController.position.maxScrollExtent);
+    _scrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 420),
+      curve: Curves.easeInOutCubic,
+    );
   }
 
   /// "导入到本地歌单": forks this (Netease/Migu) playlist's CURRENT tracks into a new
@@ -154,22 +232,40 @@ class _PlaylistPageState extends State<PlaylistPage> {
     // the accent are selected inside the isolated child widgets below instead.
     return Scaffold(
       backgroundColor: AppColors.bg,
-      body: CustomScrollView(
-        cacheExtent: 600,
-        slivers: <Widget>[
-          _PlaylistAppBar(
-            playlist: playlist,
-            collected: _collected,
-            onToggleCollect: _toggleCollect,
-            onPlayAll:
-                playlist == null ? null : () => _playAll(playlist.tracks),
-            onImport:
-                playlist == null ? null : () => _importToLocal(playlist),
-            onBack: () {
-              if (context.canPop()) context.pop();
-            },
+      body: Stack(
+        children: <Widget>[
+          CustomScrollView(
+            controller: _scrollController,
+            cacheExtent: 600,
+            slivers: <Widget>[
+              _PlaylistAppBar(
+                playlist: playlist,
+                collected: _collected,
+                searchActive: _searchActive,
+                onToggleSearch: playlist == null ? null : _toggleSearch,
+                onToggleCollect: _toggleCollect,
+                onPlayAll:
+                    playlist == null ? null : () => _playAll(playlist.tracks),
+                onImport:
+                    playlist == null ? null : () => _importToLocal(playlist),
+                onBack: () {
+                  if (context.canPop()) context.pop();
+                },
+              ),
+              ..._body(context, playlist: playlist, loading: loading),
+            ],
           ),
-          ..._body(context, playlist: playlist, loading: loading),
+          // Locate pill floats over the list; hidden while searching (the
+          // filtered list breaks the full-list offset math). Its own selector
+          // keeps build() from watching PlayerProvider.
+          if (playlist != null &&
+              playlist.tracks.isNotEmpty &&
+              !_searchActive)
+            _LocateButton(
+              controller: _scrollController,
+              tracks: playlist.tracks,
+              onLocate: () => _locateCurrent(playlist.tracks),
+            ),
         ],
       ),
     );
@@ -190,19 +286,54 @@ class _PlaylistPageState extends State<PlaylistPage> {
       return <Widget>[_emptySliver(loading)];
     }
     final List<Song> tracks = playlist.tracks;
+    final List<int> matches = _matches(tracks);
     return <Widget>[
-      SliverList.builder(
-        itemCount: tracks.length,
-        itemBuilder: (BuildContext context, int index) => _PlaylistTrackRow(
-          song: tracks[index],
-          index: index,
-          onTap: () => _playFrom(tracks, index),
+      if (_searchActive)
+        SliverPersistentHeader(
+          pinned: true,
+          delegate: _SearchBarHeaderDelegate(
+            controller: _searchController,
+            onChanged: _onQueryChanged,
+            onClose: _toggleSearch,
+          ),
         ),
-      ),
+      if (_searchActive && matches.isEmpty)
+        _noResultsSliver()
+      else
+        SliverFixedExtentList.builder(
+          itemExtent: kPlaylistRowExtent,
+          itemCount: matches.length,
+          itemBuilder: (BuildContext context, int i) {
+            final int orig = matches[i];
+            return _PlaylistTrackRow(
+              song: tracks[orig],
+              index: orig, // real track number + correct active-row highlight
+              onTap: () => _playFrom(tracks, orig), // full playlist = queue
+            );
+          },
+        ),
       const SliverToBoxAdapter(
         child: SizedBox(height: AppDimens.space32),
       ),
     ];
+  }
+
+  Widget _noResultsSliver() {
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.all(AppDimens.space32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const Icon(Icons.search_off_rounded,
+                color: AppColors.onSurfaceFaint, size: 48),
+            const SizedBox(height: AppDimens.space16),
+            Text('没有找到「${_query.trim()}」相关的歌曲',
+                style: AppTypography.label, textAlign: TextAlign.center),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _errorSliver(BuildContext context) {
@@ -243,6 +374,8 @@ String _fmtDuration(Duration d) {
 class _PlaylistAppBar extends StatelessWidget {
   final Playlist? playlist;
   final bool? collected;
+  final bool searchActive;
+  final VoidCallback? onToggleSearch;
   final Future<void> Function(Playlist) onToggleCollect;
   final VoidCallback? onPlayAll;
   final VoidCallback? onImport;
@@ -251,6 +384,8 @@ class _PlaylistAppBar extends StatelessWidget {
   const _PlaylistAppBar({
     required this.playlist,
     required this.collected,
+    required this.searchActive,
+    required this.onToggleSearch,
     required this.onToggleCollect,
     required this.onPlayAll,
     required this.onImport,
@@ -280,6 +415,15 @@ class _PlaylistAppBar extends StatelessWidget {
         onPressed: onBack,
       ),
       actions: <Widget>[
+        if (pl != null && onToggleSearch != null)
+          IconButton(
+            tooltip: searchActive ? '关闭搜索' : '搜索歌单内歌曲',
+            icon: Icon(
+              searchActive ? Icons.search_off_rounded : Icons.search_rounded,
+              color: AppColors.onSurface,
+            ),
+            onPressed: onToggleSearch,
+          ),
         if (pl != null && onImport != null)
           IconButton(
             tooltip: '导入到本地歌单',
@@ -510,6 +654,163 @@ class _MessageState extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// Pinned 56px search bar shown beneath the (also-pinned) [SliverAppBar] while
+/// in-playlist search is active — it docks under the collapsed header and stays
+/// visible while the filtered results scroll.
+class _SearchBarHeaderDelegate extends SliverPersistentHeaderDelegate {
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClose;
+
+  _SearchBarHeaderDelegate({
+    required this.controller,
+    required this.onChanged,
+    required this.onClose,
+  });
+
+  static const double _height = 56;
+
+  @override
+  double get minExtent => _height;
+  @override
+  double get maxExtent => _height;
+
+  @override
+  Widget build(
+      BuildContext context, double shrinkOffset, bool overlapsContent) {
+    return Container(
+      height: _height,
+      color: AppColors.bg,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppDimens.space16,
+        vertical: AppDimens.space8,
+      ),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: TextField(
+              controller: controller,
+              autofocus: true,
+              onChanged: onChanged,
+              textInputAction: TextInputAction.search,
+              style: AppTypography.body,
+              cursorColor: AppColors.onSurface,
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: '搜索歌单内歌曲',
+                hintStyle: AppTypography.label,
+                prefixIcon: const Icon(Icons.search_rounded,
+                    color: AppColors.onSurfaceFaint, size: 20),
+                filled: true,
+                fillColor: AppColors.surfaceGlass,
+                contentPadding:
+                    const EdgeInsets.symmetric(vertical: AppDimens.space8),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(AppDimens.radiusPill),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: onClose,
+            style: TextButton.styleFrom(foregroundColor: AppColors.onSurface),
+            child: const Text('取消'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  bool shouldRebuild(covariant _SearchBarHeaderDelegate old) =>
+      old.controller != controller;
+}
+
+/// Floating "定位" pill. Appears only when a track of THIS playlist is playing
+/// AND that row is scrolled off-screen; tapping it animates the list to that
+/// row. Two isolated gates keep the page build() from watching PlayerProvider:
+/// a `context.select` on the current song id (rebuilds only this overlay on a
+/// track switch), and an [AnimatedBuilder] on the [ScrollController] (re-checks
+/// on-screen state per scroll frame).
+class _LocateButton extends StatelessWidget {
+  final ScrollController controller;
+  final List<Song> tracks;
+  final VoidCallback onLocate;
+
+  const _LocateButton({
+    required this.controller,
+    required this.tracks,
+    required this.onLocate,
+  });
+
+  bool _isRowVisible(BuildContext context, int index) {
+    final double offset = controller.hasClients ? controller.offset : 0.0;
+    final MediaQueryData mq = MediaQuery.of(context);
+    final double collapsed = mq.padding.top + kToolbarHeight;
+    final double contentTop = _kExpandedAppBarHeight + index * kPlaylistRowExtent;
+    final double screenTop = contentTop - offset;
+    final double screenBottom = screenTop + kPlaylistRowExtent;
+    return screenBottom > collapsed && screenTop < mq.size.height;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Object? currentId = context
+        .select<PlayerProvider, Object?>((PlayerProvider p) => p.currentSong?.id);
+    final int index = currentId == null
+        ? -1
+        : tracks.indexWhere((Song s) => s.id == currentId);
+    if (index < 0) return const SizedBox.shrink();
+    return Positioned(
+      right: AppDimens.space16,
+      bottom: MediaQuery.of(context).padding.bottom + AppDimens.space20,
+      child: AnimatedBuilder(
+        animation: controller,
+        builder: (BuildContext context, Widget? child) =>
+            _isRowVisible(context, index)
+                ? const SizedBox.shrink()
+                : child!,
+        child: _LocatePill(onTap: onLocate),
+      ),
+    );
+  }
+}
+
+class _LocatePill extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _LocatePill({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.surfaceGlass,
+      elevation: 4,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppDimens.radiusPill),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        child: const Padding(
+          padding: EdgeInsets.symmetric(
+              horizontal: AppDimens.space12, vertical: AppDimens.space8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Icon(Icons.my_location_rounded,
+                  size: 18, color: AppColors.onSurface),
+              SizedBox(width: AppDimens.space8),
+              Text('定位'),
+            ],
+          ),
+        ),
       ),
     );
   }

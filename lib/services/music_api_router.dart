@@ -21,6 +21,13 @@ class MusicApiRouter extends ChangeNotifier implements MusicApi {
   final MusicApi migu;
   final MusicApi netease;
   final MusicApi kugou;
+
+  /// 酷狗概念版 (FreeListen/Lite Android) — a separate source from web [kugou].
+  final MusicApi kugougn;
+
+  /// QQ 音乐（安卓客户端）— an INDEPENDENT source from the web QQ that occupies the
+  /// [migu] slot; its own qqcn_* session.
+  final MusicApi qqcn;
   final MusicApi kuwo;
 
   /// Backend for user-imported on-device files ([MusicSource.local]).
@@ -31,6 +38,8 @@ class MusicApiRouter extends ChangeNotifier implements MusicApi {
     required this.migu,
     required this.netease,
     required this.kugou,
+    required this.kugougn,
+    required this.qqcn,
     MusicApi? kuwo,
     this.local = const LocalMusicApi(),
     MusicSource initial = MusicSource.netease,
@@ -47,6 +56,10 @@ class MusicApiRouter extends ChangeNotifier implements MusicApi {
         return netease;
       case MusicSource.kugou:
         return kugou;
+      case MusicSource.kugougn:
+        return kugougn;
+      case MusicSource.qqcn:
+        return qqcn;
       case MusicSource.kuwo:
         return this.kuwo;
       case MusicSource.local:

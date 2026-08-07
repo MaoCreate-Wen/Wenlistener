@@ -77,6 +77,13 @@ class NeonFlowBackground extends StatefulWidget {
   /// gently but never pulses with the beat — the lyrics-page 律动 settings toggle.
   final bool reactive;
 
+  /// The player↔lyrics morph clock (0=player, 1=lyrics). While it is strictly
+  /// between 0 and 1 the field HOLDS its last frame (skips the ≈40k-vertex
+  /// drawVertices) so the 280ms transition stays at 60fps — the flow turns only
+  /// once per ~31s, so a held frame is invisible. Read ONLY inside the Ticker, so
+  /// a changing value never rebuilds this widget.
+  final Animation<double>? morph;
+
   const NeonFlowBackground({
     super.key,
     this.imageUrl,
@@ -85,6 +92,7 @@ class NeonFlowBackground extends StatefulWidget {
     this.flowSpeed = 2,
     this.lowFreqVolume,
     this.reactive = true,
+    this.morph,
   });
 
   @override
@@ -159,9 +167,29 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
     super.initState();
     _speedEase = widget.playing ? 1.0 : 0.15;
     _pulseEase = widget.playing ? 1.0 : 0.0;
-    _ticker = createTicker(_onTick)..start();
+    _ticker = createTicker(_onTick);
+    // The neon is Opacity(0)/hidden in player mode (morph t≈0). Running its ticker
+    // there produces a frame every vsync forever (a baseline cost that compounds
+    // with any other animation). Gate the ticker on the morph so it only runs
+    // once lyrics are being shown; when morph is null (no player), run normally.
+    widget.morph?.addListener(_syncTicker);
+    _syncTicker();
     _ensureDither();
     _maybeLoad();
+  }
+
+  /// Starts the ticker while the neon is (becoming) visible, stops it while fully
+  /// in player mode so the engine can idle.
+  void _syncTicker() {
+    final double m = widget.morph?.value ?? 1.0;
+    if (m <= 0.001) {
+      if (_ticker.isActive) {
+        _ticker.stop();
+        _last = Duration.zero; // so the next tick's dt starts clean (no jump)
+      }
+    } else if (!_ticker.isActive) {
+      _ticker.start();
+    }
   }
 
   /// Builds the shared dither tile the first time any background mounts, then
@@ -213,6 +241,17 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
     final double dtMs =
         _last == Duration.zero ? 0 : (elapsed - _last).inMicroseconds / 1000.0;
     _last = elapsed;
+
+    // FREEZE the field while the player↔lyrics morph is in flight (0 < t < 1):
+    // hold the last emitted frame so the ≈40k-vertex drawVertices + ImageShader
+    // is NOT re-run for the 280ms morph while the cover morphs and the neon
+    // cross-fades in. The flow turns once per ~31s, so a held frame is invisible;
+    // skipping the dt integration too means the flow clock doesn't jump when the
+    // morph settles and animation resumes. `_last` is already updated above, so
+    // resume computes dt from now (no accumulated backlog). Note: at t==0 the
+    // neon paints under Opacity(0) (skipped) so the tick here is nearly free.
+    final double? m = widget.morph?.value;
+    if (m != null && m > 0.001 && m < 0.999) return;
 
     // Play/pause SPEED gate (a gate on the flow SPEED, not a fake volume): ease to
     // 1.0 playing / 0.15 paused over ~400ms.
@@ -293,6 +332,7 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
 
   @override
   void dispose() {
+    widget.morph?.removeListener(_syncTicker);
     _ticker.dispose();
     _frameTime.dispose();
     _pulseNotifier.dispose();
@@ -388,8 +428,18 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
     List<Color> depthColors,
   ) async {
     try {
-      final ImageProvider provider =
-          CachedNetworkImageProvider(url, headers: kNeteaseImageHeaders);
+      // The mesh only needs the cover downscaled to 32² (buildAlbumTexture), so
+      // decode it at 64² via ResizeImage instead of full resolution — decoding a
+      // ~4 MB full-res RGBA per song only to throw it away at 32² is pure waste
+      // (and it used to leak: the cover handle below was never disposed). 64²
+      // gives the low-quality downscale ample headroom; the 32² result is
+      // visually identical.
+      final ImageProvider provider = ResizeImage(
+        CachedNetworkImageProvider(url, headers: kNeteaseImageHeaders),
+        width: 64,
+        height: 64,
+        allowUpscaling: false,
+      );
       final Completer<ui.Image> completer = Completer<ui.Image>();
       final ImageStream stream = provider.resolve(const ImageConfiguration());
       late final ImageStreamListener listener;
@@ -405,7 +455,14 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
       );
       stream.addListener(listener);
       final ui.Image cover = await completer.future;
-      return await buildAlbumTexture(cover, depthColors: depthColors);
+      try {
+        // buildAlbumTexture fully consumes `cover` (drawImageRect + toImage are
+        // awaited inside) before returning, so releasing the decode handle here
+        // is safe — and stops one cover clone leaking per song.
+        return await buildAlbumTexture(cover, depthColors: depthColors);
+      } finally {
+        cover.dispose();
+      }
     } catch (e) {
       debugPrint('NeonFlowBackground texture build failed: $e');
       return null;
@@ -420,8 +477,11 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
 /// would overflow the 65 536 Uint16 index ceiling at 50, so [_pushLayer] clamps their
 /// subdivisions (7×7 → 42 → 252×252 = 63 504, still under the ceiling); the warp is
 /// visually identical a few steps below 50. The mesh is built once per album and
-/// cached, so per frame we only rotate texCoords + drawVertices — cheap at 30fps.
-const int _kSubdivisions = 50;
+/// cached, so per frame we only rotate texCoords + drawVertices. Lowered 50→32
+/// (5×5 → 128×128 ≈ 16k verts, from 40k): on Impeller the mesh layer is
+/// re-encoded (drawVertices) every frame it composites during the morph, so
+/// fewer verts ≈ proportionally cheaper encode; the warp is visually identical.
+const int _kSubdivisions = 32;
 
 /// Uniform outward scale on clip positions. **AMLL uses none (1.0)**: every preset
 /// pins its border control points at exactly ±1 and the aspect logic
@@ -516,14 +576,17 @@ class MeshLayer {
   Float32List? _posScreen;
   double _colorsForAlpha = -1;
 
-  /// The mirrored-repeat texture shader — built once per layer, not per frame.
-  late final ui.ImageShader shader = ui.ImageShader(
-    texture,
-    TileMode.mirror,
-    TileMode.mirror,
-    _kIdentity,
-    filterQuality: FilterQuality.low,
-  );
+  /// The mirrored-repeat texture shader — built once per layer (lazily, on the
+  /// first paint), not per frame. Nullable + lazy so [dispose] can release the
+  /// native shader without force-building one for a layer that never painted.
+  ui.ImageShader? _shader;
+  ui.ImageShader get shader => _shader ??= ui.ImageShader(
+        texture,
+        TileMode.mirror,
+        TileMode.mirror,
+        _kIdentity,
+        filterQuality: FilterQuality.low,
+      );
 
   /// Maps the clip-space mesh positions to screen pixels for [size], applying the
   /// AMLL aspect overscan (`aspect>1 → y*=aspect; else x/=aspect`) + a small
@@ -584,9 +647,15 @@ class MeshLayer {
     return _texCoords;
   }
 
-  /// Drops this layer. The [texture] is **owned by the URL cache**, not the
-  /// layer, so nothing is disposed here (a re-opened track reuses the texture).
-  void dispose() {}
+  /// Drops this layer. The [texture] is **owned by the URL cache** (`_texCache`),
+  /// not the layer, so it is NOT disposed here (a re-opened track reuses it). The
+  /// per-layer [shader] IS ours, though — release the native ImageShader so it
+  /// doesn't leak once per song change (retired layers are already removed from
+  /// `_layers`, so nothing paints them after this).
+  void dispose() {
+    _shader?.dispose();
+    _shader = null;
+  }
 }
 
 double _easeInOutSine(double x) => -(math.cos(math.pi * x) - 1) / 2;

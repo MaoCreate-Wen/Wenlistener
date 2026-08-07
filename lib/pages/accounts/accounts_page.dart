@@ -7,7 +7,7 @@ import '../../models/kugou_account.dart';
 import '../../router/routes.dart';
 import '../../state/auth_provider.dart';
 import '../../state/kugou_auth_provider.dart';
-import '../../state/qq_auth_provider.dart';
+import '../../state/qqcn_auth_provider.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_dimens.dart';
 import '../../theme/app_typography.dart';
@@ -133,18 +133,21 @@ class _QqSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final QqAuthProvider qq = context.watch<QqAuthProvider>();
+    final QqcnAuthProvider qq = context.watch<QqcnAuthProvider>();
+    // QqcnAuthProvider already exposes its accounts as CookieAccount rows.
+    final List<CookieAccount> rows = qq.accounts;
     return _CookieAccountSection(
-      accounts: qq.accounts,
+      accounts: rows,
       activeId: qq.activeId,
       fallback: 'QQ音乐用户',
-      emptyHint: 'QQ音乐需登录后才能搜索与播放（微信 / QQ 扫码）',
-      addLabel: qq.accounts.isEmpty ? '登录 QQ音乐' : '添加 QQ音乐账号',
-      onSwitch: (String id) => context.read<QqAuthProvider>().switchAccount(id),
+      emptyHint: 'QQ音乐需登录后才能播放完整歌曲（QQ / 微信 扫码，同一二维码）',
+      addLabel: rows.isEmpty ? '登录 QQ音乐' : '添加 QQ音乐账号',
+      onSwitch: (String id) =>
+          context.read<QqcnAuthProvider>().switchAccount(id),
       onRemove: (CookieAccount a) async {
         final String name = a.nickname.isEmpty ? 'QQ音乐用户 ${a.id}' : a.nickname;
         if (await _confirmRemove(context, name) && context.mounted) {
-          await context.read<QqAuthProvider>().removeAccount(a.id);
+          await context.read<QqcnAuthProvider>().removeAccount(a.id);
         }
       },
       onAdd: () => context.push(Routes.qqLogin),

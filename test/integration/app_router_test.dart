@@ -228,7 +228,7 @@ Future<void> _pumpApp(
     MultiProvider(
       providers: <SingleChildWidget>[
         ChangeNotifierProvider<MusicApiRouter>.value(
-          value: MusicApiRouter(migu: MiguApi(), netease: MiguApi(), kugou: MiguApi()),
+          value: MusicApiRouter(migu: MiguApi(), netease: MiguApi(), kugou: MiguApi(), kugougn: MiguApi(), qqcn: MiguApi()),
         ),
         ChangeNotifierProvider<PlayerProvider>.value(value: player),
         ChangeNotifierProvider<LibraryProvider>.value(value: library),
@@ -243,7 +243,7 @@ Future<void> _pumpApp(
         Provider<FftService>.value(value: FftService()),
         ChangeNotifierProvider<SettingsProvider>(
           create: (_) => SettingsProvider(
-            router: MusicApiRouter(migu: MiguApi(), netease: MiguApi(), kugou: MiguApi()),
+            router: MusicApiRouter(migu: MiguApi(), netease: MiguApi(), kugou: MiguApi(), kugougn: MiguApi(), qqcn: MiguApi()),
             store: SettingsStore(),
             source: MusicSource.netease,
             rhythmEnabled: false,
@@ -282,7 +282,7 @@ Widget _wrapPage(
       ChangeNotifierProvider<SettingsProvider>(
         create: (_) => SettingsProvider(
           router: MusicApiRouter(
-              migu: MiguApi(), netease: MiguApi(), kugou: MiguApi()),
+              migu: MiguApi(), netease: MiguApi(), kugou: MiguApi(), kugougn: MiguApi(), qqcn: MiguApi()),
           store: SettingsStore(),
           source: MusicSource.netease,
           rhythmEnabled: false,

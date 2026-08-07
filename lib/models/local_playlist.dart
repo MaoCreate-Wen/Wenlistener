@@ -31,7 +31,8 @@ class LocalPlaylistOrigin {
     if (j is! Map) return null;
     final Map<String, dynamic> m = Map<String, dynamic>.from(j);
     MusicSource source = MusicSource.netease;
-    final String? sn = m['source']?.toString();
+    String? sn = m['source']?.toString();
+    if (sn == 'kugouGn') sn = 'kugougn'; // renamed enum migration
     for (final MusicSource s in MusicSource.values) {
       if (s.name == sn) {
         source = s;

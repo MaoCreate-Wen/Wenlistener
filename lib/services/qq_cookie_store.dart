@@ -67,6 +67,12 @@ class QqCookieStore {
   /// `uin` for `comm` / the vkey request (WeChat login sets `wxuin`, QQ sets `uin`).
   String get uin => _cache['wxuin'] ?? _cache['uin'] ?? '0';
 
+  /// QQ-Connect tokens landed by [saveLoginCookies] from the QQLogin exchange —
+  /// the QQ **Android** backend feeds these to `GetSession` to obtain its own
+  /// `authst` session ticket (see [QqAndroidApi.getSession]). Empty when logged out.
+  String get accessToken => _cache['psrf_qqaccess_token'] ?? '';
+  String get openid => _cache['psrf_qqopenid'] ?? '';
+
   /// The session key that proves a completed login. Search/play only work when
   /// this is present.
   bool get isLoggedIn =>

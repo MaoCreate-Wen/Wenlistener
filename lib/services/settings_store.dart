@@ -55,7 +55,8 @@ class SettingsStore {
       final Map<String, dynamic> m = Map<String, dynamic>.from(decoded);
 
       MusicSource source = SettingsData.defaults.source;
-      final String? sn = m['source']?.toString();
+      String? sn = m['source']?.toString();
+      if (sn == 'kugouGn') sn = 'kugougn'; // renamed enum value migration
       for (final MusicSource s in MusicSource.values) {
         if (s.name == sn) {
           source = s;

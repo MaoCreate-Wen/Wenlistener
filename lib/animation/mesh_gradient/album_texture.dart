@@ -96,7 +96,12 @@ Future<ui.Image> buildAlbumTexture(
     ui.Rect.fromLTWH(0, 0, nd, nd),
     ui.Paint()..filterQuality = ui.FilterQuality.low,
   );
-  final ui.Image small = await recorder.endRecording().toImage(n, n);
+  // Keep the Picture in a local so it can be disposed — inlining
+  // `recorder.endRecording().toImage(...)` drops the native ui.Picture handle,
+  // leaking one per new cover (every song change). Dispose it once rasterized.
+  final ui.Picture picture = recorder.endRecording();
+  final ui.Image small = await picture.toImage(n, n);
+  picture.dispose();
   final ByteData? bd =
       await small.toByteData(format: ui.ImageByteFormat.rawRgba);
   small.dispose();

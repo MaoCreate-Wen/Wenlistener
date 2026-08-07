@@ -26,6 +26,8 @@ class KugouAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
     required this.store,
     required this.router,
   }) {
+    // Drop the active account when a play call reports the token expired.
+    api.onSessionExpired = _handleSessionExpired;
     WidgetsBinding.instance.addObserver(this);
     unawaited(_init());
   }
@@ -170,6 +172,22 @@ class KugouAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
     _activeUserId = account.userId;
     _apply();
     await _persist();
+  }
+
+  /// Handles an expired-token signal from [KugouApi] (a logged-in play call came
+  /// back `err 30020`). Removes the dead account and falls back to the next
+  /// saved one (or logged-out). Kugou has no refresh token, so recovery is a
+  /// fresh QR scan — with the account gone, `isLoggedIn` is false and the
+  /// settings page auto-restarts the QR login. Guarded to the still-active
+  /// account so a stale callback for an already-switched account is ignored.
+  void _handleSessionExpired(String userId) {
+    if (_activeUserId != userId) return;
+    _accounts =
+        _accounts.where((KugouAccount a) => a.userId != userId).toList();
+    _activeUserId = _accounts.isNotEmpty ? _accounts.first.userId : null;
+    _apply(); // reinstall the fallback credential (or null) + refresh feeds
+    notifyListeners();
+    unawaited(_persist());
   }
 
   /// Out-of-band poll fired on app-resume (the user scans in the Kugou app).

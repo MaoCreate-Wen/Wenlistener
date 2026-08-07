@@ -39,6 +39,12 @@ class QqApi implements MusicApi {
   final QqCrypto _crypto;
   final QqCookieStore _cookies;
 
+  /// Fired when [verifyLoginState] confirms the session is dead (a well-formed
+  /// authed reply that rejects the login). The auth layer clears the session so
+  /// the QR prompt reappears. Never fired on an ambiguous/unknown result, so a
+  /// transient failure can't log the user out.
+  void Function()? onSessionExpired;
+
   QqApi({required QqCookieStore cookies, QqCrypto crypto = const QqCrypto()})
       : _cookies = cookies,
         _crypto = crypto,
@@ -798,6 +804,54 @@ class QqApi implements MusicApi {
       nickname: _cookies.nickname ?? '',
       avatarUrl: _cookies.avatarUrl,
     );
+  }
+
+  /// Server-side login-state check via the doc's designated verifier
+  /// (`music.paycenterapi.LoginStateVerificationApi/GetChargeAccount`, 登录态校验).
+  /// Returns:
+  ///  • `true`  — session valid (well-formed authed reply accepted);
+  ///  • `false` — session DEFINITIVELY expired (well-formed reply that rejects
+  ///              the login: top-level `code` present & non-zero, or `req_1.code`
+  ///              non-zero) → fires [onSessionExpired];
+  ///  • `null`  — unknown (not logged in locally, empty/undecodable reply, or
+  ///              transport error) → caller keeps the current session.
+  ///
+  /// QQ exposes no clean per-call expiry signal (an empty search / vkey 104003
+  /// are indistinguishable from "no results" / VIP-locked), so this dedicated
+  /// probe is the only reliable detector. It is deliberately conservative: only
+  /// a well-formed rejection logs out; anything ambiguous is treated as transient.
+  Future<bool?> verifyLoginState() async {
+    await _cookies.reload();
+    if (!_cookies.isLoggedIn) return null;
+    Map<String, dynamic> body;
+    try {
+      body = await _encReq(<String, dynamic>{
+        'comm': _comm(),
+        'req_1': <String, dynamic>{
+          'module': 'music.paycenterapi.LoginStateVerificationApi',
+          'method': 'GetChargeAccount',
+          'param': <String, dynamic>{'appid': 'mlive'},
+        },
+      });
+    } catch (_) {
+      return null; // transport/decrypt failure → unknown, keep session
+    }
+    if (body.isEmpty) return null;
+    final int? top = (body['code'] as num?)?.toInt();
+    final dynamic req1 = body['req_1'];
+    final int? reqCode =
+        req1 is Map ? (req1['code'] as num?)?.toInt() : null;
+    // A well-formed reply carries at least one code. Reject only when a code is
+    // present AND non-zero (login refused); code 1000 = "module not implemented"
+    // is NOT an auth failure, so keep the session on that.
+    final bool rejected = (top != null && top != 0 && top != 1000) ||
+        (reqCode != null && reqCode != 0);
+    if (rejected) {
+      onSessionExpired?.call();
+      return false;
+    }
+    if ((top == 0) || (reqCode == 0)) return true;
+    return null; // no usable code → unknown
   }
 
   Future<void> logout() => _cookies.clear();

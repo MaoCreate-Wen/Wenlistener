@@ -53,6 +53,14 @@ class NeteaseApi implements MusicApi {
 
   NeteaseApi({required this.dio, required this.crypto, required this.cookies});
 
+  /// Fired by [postWeapi] when the server rejects an authed call with a
+  /// login-required code (301 / 20001) — the reliable "session expired" signal.
+  /// The auth layer wires this to attempt a silent [refreshSession] and, failing
+  /// that, drop to logged-out so the UI re-prompts a QR scan. Never fired for a
+  /// transport error (that stays a transient failure), so a network blip can't
+  /// log the user out.
+  void Function()? onSessionExpired;
+
   static final Random _random = Random.secure();
 
   /// QR-login session correlation, set once in [qrCreate] and reused by every
@@ -83,12 +91,42 @@ class NeteaseApi implements MusicApi {
         await _postWeapiRaw(path, payload, needsCsrf: needsCsrf);
     final int? code = (map['code'] as num?)?.toInt();
     if (code != null && code != 200) {
+      // 301 / 20001 = "please log in" — the authoritative expired-session signal
+      // for authed calls. Notify the auth layer (which tries a silent renewal,
+      // then forces re-login) instead of letting feeds/songUrl silently fail.
+      if (code == 301 || code == 20001) {
+        onSessionExpired?.call();
+      }
       throw NeteaseApiException(
         map['message']?.toString() ?? 'API error',
         statusCode: code,
       );
     }
     return map;
+  }
+
+  /// Silent session renewal. POSTs to [NeteaseEndpoints.tokenRefresh]; the jar's
+  /// `MUSIC_R_T` (refresh token) rides along via the [CookieManager] and a 200
+  /// Set-Cookies a fresh `MUSIC_U`. Returns true on success. Uses [_postWeapiRaw]
+  /// (not [postWeapi]) so a non-200 renewal doesn't re-fire [onSessionExpired]
+  /// and loop. Any transport/decoding failure returns false (treated as "couldn't
+  /// renew" — the caller then decides whether to force logout).
+  Future<bool> refreshSession() async {
+    try {
+      final Map<String, dynamic> res = await _postWeapiRaw(
+        NeteaseEndpoints.tokenRefresh,
+        <String, dynamic>{},
+      );
+      final int? code = (res['code'] as num?)?.toInt();
+      if (code == 200) {
+        await cookies.reload(); // pull the freshly Set-Cookie'd MUSIC_U into cache
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint('NeteaseApi.refreshSession failed: $e');
+      return false;
+    }
   }
 
   /// Lower-level weapi POST: encrypts [payload] (+ csrf), POSTs, and returns the

@@ -65,14 +65,33 @@ class _ArtBackgroundState extends State<ArtBackground>
   @override
   void initState() {
     super.initState();
-    _ticker = createTicker(_onTick)..start();
+    // The ambient ±2% drift is DELIBERATELY NOT started: driving it forced the
+    // outer RepaintBoundary to re-rasterize the whole full-screen stack (base
+    // fill + blurred cover + gradient scrim ≈ 3 full-screen passes over 4.6M px)
+    // every 30fps — ~8ms/frame at QHD+ 120Hz, saturating the budget at rest and
+    // making every /player animation (Hero flight, lyrics morph) drop frames. Left
+    // idle, `_time` stays 0 so the background rasters ONCE and is cached; parents
+    // then just composite that static layer. Re-enable `..start()` only if the
+    // drift is reworked to a low-res / shader layer that doesn't re-raster the
+    // full stack. `_ticker`/`_onTick` are retained (created + disposed) so the
+    // 30fps-capped drift can be restored in one edit.
+    _ticker = createTicker(_onTick);
   }
 
+  // The drift is a slow blurred-cover rotation — 30fps is indistinguishable from
+  // 60 here and halves this always-running ticker's paint cost (it repaints a
+  // full-screen blurred image each emit). Accumulate dt and emit at ≤30fps.
+  static const double _minFrameMs = 33;
+  double _accumMs = 0;
+
   void _onTick(Duration elapsed) {
-    final double dt =
-        _last == Duration.zero ? 0 : (elapsed - _last).inMicroseconds / 1e6;
+    final double dtMs =
+        _last == Duration.zero ? 0 : (elapsed - _last).inMicroseconds / 1000.0;
     _last = elapsed;
-    _time.value += dt;
+    _accumMs += dtMs;
+    if (_accumMs < _minFrameMs) return;
+    _time.value += _accumMs / 1000.0;
+    _accumMs = 0;
   }
 
   @override

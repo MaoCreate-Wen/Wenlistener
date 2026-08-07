@@ -56,7 +56,8 @@ class _StubSearchProvider extends SearchProvider {
       crypto: const NeteaseCrypto(),
       cookies: CookieStore(jar: CookieJar()),
     );
-    return MusicApiRouter(migu: parked, netease: parked, kugou: parked);
+    return MusicApiRouter(
+        migu: parked, netease: parked, kugou: parked, kugougn: parked, qqcn: parked);
   }
 
   SearchType _type = SearchType.song;

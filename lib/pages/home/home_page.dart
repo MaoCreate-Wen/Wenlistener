@@ -6,7 +6,7 @@ import '../../models/home_section.dart';
 import '../../models/song.dart';
 import '../../router/routes.dart';
 import '../../state/library_provider.dart';
-import '../../state/qq_auth_provider.dart';
+import '../../state/qqcn_auth_provider.dart';
 import '../../state/settings_provider.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_dimens.dart';
@@ -46,12 +46,12 @@ class _HomePageState extends State<HomePage> {
     final LibraryProvider library = context.watch<LibraryProvider>();
     final MusicSource source =
         context.select<SettingsProvider, MusicSource>((s) => s.source);
-    // QQ (the `migu` slot) needs a login before recommendations mean anything —
+    // QQ 音乐（安卓 `qqcn` 源）needs a login before recommendations mean anything —
     // read (not watch): a QQ login fires a LibraryProvider reload via the router,
-    // which already rebuilds this page. (source != migu skips the read, so the
-    // widget test — which has no QqAuthProvider — is unaffected.)
-    final bool qqNeedsLogin = source == MusicSource.migu &&
-        !context.read<QqAuthProvider>().isLoggedIn;
+    // which already rebuilds this page. (source != qqcn skips the read, so the
+    // widget test — which has no QqcnAuthProvider — is unaffected.)
+    final bool qqNeedsLogin = source == MusicSource.qqcn &&
+        !context.read<QqcnAuthProvider>().isLoggedIn;
     return AppScaffold(
       showDynamicWash: true,
       padding: EdgeInsets.zero,

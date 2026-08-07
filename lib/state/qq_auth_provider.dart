@@ -31,6 +31,8 @@ class QqAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
     CookieAccountStore? accountStore,
   }) : _store = accountStore ?? const CookieAccountStore('qq_accounts.json') {
     _isLoggedIn = cookies.isLoggedIn;
+    // Drop the session when a server-side verify confirms it's expired.
+    api.onSessionExpired = _handleSessionExpired;
     WidgetsBinding.instance.addObserver(this);
     unawaited(_init());
   }
@@ -47,7 +49,38 @@ class QqAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
     _accounts = data.accounts;
     _activeId = data.activeId;
     notifyListeners();
-    if (_isLoggedIn) await _refreshAccount();
+    if (_isLoggedIn) {
+      await _refreshAccount();
+      // Validate the restored session against the server (an expired qm_keyst
+      // otherwise strands the app "logged in" while every authed call fails).
+      unawaited(api.verifyLoginState());
+    }
+  }
+
+  /// Guards [_handleSessionExpired] so a burst of failing calls fires one cycle.
+  bool _handlingExpiry = false;
+
+  /// Handles a confirmed session expiry from [QqApi.verifyLoginState]. Drops the
+  /// dead account (falling back to the next saved one, or logged-out) so the
+  /// settings account section re-shows the QR prompt. QQ has no documented
+  /// silent-refresh endpoint, so recovery is a fresh scan.
+  Future<void> _handleSessionExpired() async {
+    if (_handlingExpiry || !_isLoggedIn) return;
+    _handlingExpiry = true;
+    try {
+      final String? id = _activeId;
+      if (id != null) {
+        await removeAccount(id); // drops active, falls back or logs out
+      } else {
+        await api.logout();
+        _isLoggedIn = false;
+        _account = null;
+        router.refresh();
+        notifyListeners();
+      }
+    } finally {
+      _handlingExpiry = false;
+    }
   }
 
   static const Duration _interval = Duration(seconds: 2);
@@ -251,8 +284,13 @@ class QqAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _polling) {
+    if (state != AppLifecycleState.resumed) return;
+    if (_polling) {
       unawaited(pollNow());
+    } else if (_isLoggedIn && !_handlingExpiry) {
+      // Re-validate the session on foreground so an expiry that happened while
+      // backgrounded is caught before the user hits a silently-failing call.
+      unawaited(api.verifyLoginState());
     }
   }
 

@@ -11,6 +11,7 @@ import '../../theme/app_colors.dart';
 import '../../theme/app_dimens.dart';
 import '../../theme/app_typography.dart';
 import '../../widgets/artwork_image.dart';
+import '../../widgets/playlist_search.dart';
 import '../../widgets/song_tile.dart';
 
 /// Detail for a LOCAL "共同歌单" — a cross-source, on-device playlist. Its tracks
@@ -18,6 +19,9 @@ import '../../widgets/song_tile.dart';
 /// lyrics them per-song, so a mixed list plays end to end. Tracks are removed here
 /// (long-press or the trailing ✕); they're added from the player's ··· menu or by
 /// importing a source playlist ("导入到本地歌单").
+/// Thin stateless shell: selects the single playlist (copy-on-write, so this
+/// rebuilds only when THIS list mutates) and hands it to the stateful view,
+/// which owns the search/scroll UI state so those survive list mutations.
 class LocalPlaylistPage extends StatelessWidget {
   final String playlistId;
 
@@ -25,57 +29,106 @@ class LocalPlaylistPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Select the single playlist: a mutation replaces its instance (copy-on-write),
-    // so this rebuilds only when THIS list changes; byId → null once it's deleted.
     final LocalPlaylist? pl =
         context.select<LocalPlaylistProvider, LocalPlaylist?>(
       (LocalPlaylistProvider p) => p.byId(playlistId),
     );
+    return _LocalPlaylistView(playlistId: playlistId, playlist: pl);
+  }
+}
 
-    return Scaffold(
-      backgroundColor: AppColors.bg,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          tooltip: 'Back',
-          icon: const Icon(Icons.arrow_back_ios_new_rounded,
-              color: AppColors.onSurface, size: 20),
-          onPressed: () {
-            if (context.canPop()) context.pop();
-          },
-        ),
-        title: Text(pl?.name ?? '歌单', style: AppTypography.titleM),
-        actions: <Widget>[
-          // Re-sync against the source playlist — only for imported (forked) lists.
-          if (pl != null && pl.isSyncable) _SyncButton(playlist: pl),
-          if (pl != null)
-            IconButton(
-              tooltip: '导入本地音乐',
-              icon: const Icon(Icons.library_music_outlined,
-                  color: AppColors.onSurfaceMuted, size: 22),
-              onPressed: () => _importLocal(context, pl),
-            ),
-          if (pl != null)
-            IconButton(
-              tooltip: '重命名',
-              icon: const Icon(Icons.drive_file_rename_outline_rounded,
-                  color: AppColors.onSurfaceMuted, size: 22),
-              onPressed: () => _rename(context, pl),
-            ),
-        ],
-      ),
-      body: pl == null ? const _Missing() : _Body(playlist: pl),
-    );
+/// Owns the in-page UI state (search box, scroll controller) so that a list
+/// mutation from the provider — which hands down a fresh [playlist] instance —
+/// doesn't reset the user's open search / scroll offset.
+class _LocalPlaylistView extends StatefulWidget {
+  final String playlistId;
+  final LocalPlaylist? playlist;
+
+  const _LocalPlaylistView({required this.playlistId, required this.playlist});
+
+  @override
+  State<_LocalPlaylistView> createState() => _LocalPlaylistViewState();
+}
+
+class _LocalPlaylistViewState extends State<_LocalPlaylistView> {
+  final ScrollController _scroll = ScrollController();
+  final TextEditingController _searchCtrl = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
+
+  /// Measures the (variable-height) header sliver so locate can offset past it —
+  /// there's no fixed-height SliverAppBar here.
+  final GlobalKey _headerKey = GlobalKey();
+  double _headerExtent = 176; // sensible default until first measured
+
+  bool _searching = false;
+  String _query = '';
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    _searchCtrl.dispose();
+    _searchFocus.dispose();
+    super.dispose();
   }
 
-  /// Imports on-device audio files into this playlist. Asks 文件 vs 文件夹 first,
-  /// then delegates to [LocalPlaylistProvider.importLocalFiles] and reports the
-  /// count added.
-  Future<void> _importLocal(BuildContext context, LocalPlaylist pl) async {
+  void _enterSearch() {
+    setState(() => _searching = true);
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _searchFocus.requestFocus());
+  }
+
+  void _exitSearch() {
+    _searchCtrl.clear();
+    setState(() {
+      _searching = false;
+      _query = '';
+    });
+  }
+
+  void _cacheHeaderExtent() {
+    final Size? s = _headerKey.currentContext?.size;
+    if (s != null && s.height > 0) _headerExtent = s.height;
+  }
+
+  void _toast(String m) => ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(m)));
+
+  /// Scrolls to the currently-playing track. Reads [PlayerProvider] via `read`
+  /// (on tap only) so the view never rebuilds on a track switch. If a filter is
+  /// active it exits search first so the full list is laid out (real
+  /// maxScrollExtent), then animates on the next frame.
+  void _locate() {
+    final List<Song> tracks = widget.playlist?.tracks ?? const <Song>[];
+    final Object? currentId = context.read<PlayerProvider>().currentSong?.id;
+    if (currentId == null) {
+      _toast('还没有正在播放的歌曲');
+      return;
+    }
+    final int i = tracks.indexWhere((Song s) => s.id == currentId);
+    if (i < 0) {
+      _toast('正在播放的歌曲不在此歌单');
+      return;
+    }
+    if (_searching) _exitSearch();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scroll.hasClients) return;
+      _cacheHeaderExtent();
+      final double target = (_headerExtent +
+              i * kPlaylistRowExtent -
+              AppDimens.space16)
+          .clamp(0.0, _scroll.position.maxScrollExtent);
+      _scroll.animateTo(
+        target,
+        duration: const Duration(milliseconds: 420),
+        curve: Curves.easeInOutCubic,
+      );
+    });
+  }
+
+  Future<void> _importLocal(LocalPlaylist pl) async {
     final bool? scanDir = await pickLocalImportMode(context);
-    if (scanDir == null || !context.mounted) return;
+    if (scanDir == null || !mounted) return;
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
     final LocalPlaylistProvider prov = context.read<LocalPlaylistProvider>();
     final int n = await prov.importLocalFiles(pl.id, scanDir: scanDir);
@@ -86,13 +139,154 @@ class LocalPlaylistPage extends StatelessWidget {
       ));
   }
 
-  Future<void> _rename(BuildContext context, LocalPlaylist pl) async {
+  Future<void> _rename(LocalPlaylist pl) async {
     final String? name = await showDialog<String>(
       context: context,
       builder: (BuildContext ctx) => _RenameDialog(initial: pl.name),
     );
-    if (name == null || name.isEmpty || !context.mounted) return;
+    if (name == null || name.isEmpty || !mounted) return;
     context.read<LocalPlaylistProvider>().rename(pl.id, name);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final LocalPlaylist? pl = widget.playlist;
+    // Refresh the cached header extent while it's on screen.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _cacheHeaderExtent());
+    return Scaffold(
+      backgroundColor: AppColors.bg,
+      appBar: _appBar(pl),
+      body: pl == null ? const _Missing() : _body(pl),
+    );
+  }
+
+  PreferredSizeWidget _appBar(LocalPlaylist? pl) {
+    return AppBar(
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      leading: IconButton(
+        tooltip: 'Back',
+        icon: const Icon(Icons.arrow_back_ios_new_rounded,
+            color: AppColors.onSurface, size: 20),
+        onPressed: () {
+          if (_searching) {
+            _exitSearch();
+          } else if (context.canPop()) {
+            context.pop();
+          }
+        },
+      ),
+      title: _searching
+          ? TextField(
+              controller: _searchCtrl,
+              focusNode: _searchFocus,
+              autofocus: true,
+              textInputAction: TextInputAction.search,
+              style: AppTypography.body,
+              cursorColor: AppColors.onSurface,
+              decoration: InputDecoration(
+                isCollapsed: true,
+                border: InputBorder.none,
+                hintText: '在歌单内搜索',
+                hintStyle: AppTypography.label,
+              ),
+              onChanged: (String v) => setState(() => _query = v),
+            )
+          : Text(pl?.name ?? '歌单', style: AppTypography.titleM),
+      actions: _searching
+          ? <Widget>[
+              IconButton(
+                tooltip: '关闭搜索',
+                icon: const Icon(Icons.close_rounded,
+                    color: AppColors.onSurface, size: 22),
+                onPressed: _exitSearch,
+              ),
+            ]
+          : <Widget>[
+              if (pl != null)
+                IconButton(
+                  tooltip: '定位到正在播放',
+                  icon: const Icon(Icons.my_location_rounded,
+                      color: AppColors.onSurfaceMuted, size: 22),
+                  onPressed: _locate,
+                ),
+              if (pl != null)
+                IconButton(
+                  tooltip: '搜索歌单内歌曲',
+                  icon: const Icon(Icons.search_rounded,
+                      color: AppColors.onSurfaceMuted, size: 22),
+                  onPressed: _enterSearch,
+                ),
+              // Re-sync against the source playlist — only imported (forked) lists.
+              if (pl != null && pl.isSyncable) _SyncButton(playlist: pl),
+              if (pl != null)
+                PopupMenuButton<String>(
+                  tooltip: '更多',
+                  color: AppColors.surface,
+                  icon: const Icon(Icons.more_vert_rounded,
+                      color: AppColors.onSurfaceMuted, size: 22),
+                  onSelected: (String v) {
+                    if (v == 'import') _importLocal(pl);
+                    if (v == 'rename') _rename(pl);
+                  },
+                  itemBuilder: (BuildContext ctx) => <PopupMenuEntry<String>>[
+                    const PopupMenuItem<String>(
+                      value: 'import',
+                      child: Text('导入本地音乐'),
+                    ),
+                    const PopupMenuItem<String>(
+                      value: 'rename',
+                      child: Text('重命名'),
+                    ),
+                  ],
+                ),
+            ],
+    );
+  }
+
+  Widget _body(LocalPlaylist pl) {
+    final List<Song> all = pl.tracks;
+    final String q = _query.trim();
+    final List<int> visible = q.isEmpty
+        ? List<int>.generate(all.length, (int i) => i)
+        : <int>[
+            for (int i = 0; i < all.length; i++)
+              if (songMatchesQuery(all[i], q)) i,
+          ];
+    return CustomScrollView(
+      controller: _scroll,
+      slivers: <Widget>[
+        SliverToBoxAdapter(
+          child: KeyedSubtree(key: _headerKey, child: _Header(playlist: pl)),
+        ),
+        if (all.isEmpty)
+          const SliverToBoxAdapter(child: _EmptyTracks())
+        else if (visible.isEmpty)
+          const SliverToBoxAdapter(child: _NoMatches())
+        else
+          SliverFixedExtentList(
+            itemExtent: kPlaylistRowExtent,
+            delegate: SliverChildBuilderDelegate(
+              (BuildContext context, int index) {
+                final int orig = visible[index];
+                final Song song = all[orig];
+                return _LocalTrackRow(
+                  key: ValueKey<int>(song.id),
+                  playlistId: pl.id,
+                  song: song,
+                  index: orig,
+                  onTap: () => context
+                      .read<PlayerProvider>()
+                      .playQueue(all, index: orig),
+                );
+              },
+              childCount: visible.length,
+            ),
+          ),
+        const SliverToBoxAdapter(child: SizedBox(height: AppDimens.space32)),
+      ],
+    );
   }
 }
 
@@ -164,36 +358,6 @@ class _SyncButtonState extends State<_SyncButton> {
       icon: const Icon(Icons.sync_rounded,
           color: AppColors.onSurfaceMuted, size: 22),
       onPressed: _sync,
-    );
-  }
-}
-
-class _Body extends StatelessWidget {
-  final LocalPlaylist playlist;
-
-  const _Body({required this.playlist});
-
-  @override
-  Widget build(BuildContext context) {
-    final List<Song> tracks = playlist.tracks;
-    return CustomScrollView(
-      slivers: <Widget>[
-        SliverToBoxAdapter(child: _Header(playlist: playlist)),
-        if (tracks.isEmpty)
-          const SliverToBoxAdapter(child: _EmptyTracks())
-        else
-          SliverList.builder(
-            itemCount: tracks.length,
-            itemBuilder: (BuildContext context, int index) => _LocalTrackRow(
-              playlistId: playlist.id,
-              song: tracks[index],
-              index: index,
-              onTap: () =>
-                  context.read<PlayerProvider>().playQueue(tracks, index: index),
-            ),
-          ),
-        const SliverToBoxAdapter(child: SizedBox(height: AppDimens.space32)),
-      ],
     );
   }
 }
@@ -325,6 +489,7 @@ class _LocalTrackRow extends StatelessWidget {
   final VoidCallback onTap;
 
   const _LocalTrackRow({
+    super.key,
     required this.playlistId,
     required this.song,
     required this.index,
@@ -437,7 +602,9 @@ Future<bool?> pickLocalImportMode(BuildContext context) {
 String _sourceLabel(MusicSource source) => switch (source) {
       MusicSource.netease => '网易',
       MusicSource.migu => 'QQ',
+      MusicSource.qqcn => 'QQ',
       MusicSource.kugou => '酷狗',
+      MusicSource.kugougn => '酷狗概念版',
       MusicSource.kuwo => '酷我',
       MusicSource.local => '本地',
     };
@@ -461,6 +628,26 @@ class _EmptyTracks extends StatelessWidget {
             style: AppTypography.label,
             textAlign: TextAlign.center,
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Shown when an active in-playlist search matches nothing.
+class _NoMatches extends StatelessWidget {
+  const _NoMatches();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Padding(
+      padding: EdgeInsets.all(AppDimens.space32),
+      child: Column(
+        children: <Widget>[
+          Icon(Icons.search_off_rounded,
+              size: 48, color: AppColors.onSurfaceFaint),
+          SizedBox(height: AppDimens.space12),
+          Text('没有匹配的歌曲', style: AppTypography.label),
         ],
       ),
     );

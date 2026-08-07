@@ -33,7 +33,19 @@ class ResolvingAudioSource extends StreamAudioSource {
 
   // One shared, connection-pooling client for every source — avoids spinning up
   // (and leaking) a fresh HttpClient on every range/seek request.
-  static final HttpClient _client = HttpClient();
+  //
+  // `connectionTimeout` caps the TCP connect; without it a dead host would hang
+  // the connect forever. But the connect timeout does NOT cover a socket that
+  // connects yet never sends response headers (a half-open CDN / captive proxy),
+  // so [_fetch] additionally `.timeout()`s the header phase below — otherwise
+  // that await never returns, the track stays buffering forever and the
+  // auto-skip-to-next chain (which relies on [request] throwing) deadlocks.
+  static final HttpClient _client = HttpClient()
+    ..connectionTimeout = const Duration(seconds: 15);
+
+  /// Deadline for getting response headers back after the request is sent —
+  /// guards against a connected-but-silent socket (see [_client]).
+  static const Duration _headerTimeout = Duration(seconds: 20);
 
   @override
   Future<StreamAudioResponse> request([int? start, int? end]) async {
@@ -72,14 +84,20 @@ class ResolvingAudioSource extends StreamAudioSource {
     if (url.startsWith('file://')) {
       return _fetchFile(Uri.parse(url).toFilePath(), start, end);
     }
-    final HttpClientRequest req = await _client.getUrl(Uri.parse(url));
+    final HttpClientRequest req = await _client
+        .getUrl(Uri.parse(url))
+        .timeout(_headerTimeout);
     req.headers.set(HttpHeaders.userAgentHeader,
         'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile');
     if (start != null || end != null) {
       req.headers.set(HttpHeaders.rangeHeader,
           'bytes=${start ?? 0}-${end != null ? end - 1 : ''}');
     }
-    final HttpClientResponse resp = await req.close();
+    // Cap the "sent request, waiting for headers" phase: a socket that connects
+    // but never replies would otherwise hang here forever. On timeout this throws
+    // TimeoutException → request()'s self-heal re-resolves once, then a second
+    // failure propagates so AudioService skips this index (never a stuck buffer).
+    final HttpClientResponse resp = await req.close().timeout(_headerTimeout);
     final int code = resp.statusCode;
     // Only 200 (full body) and 206 (range) are usable. Anything else — expired
     // CDN link (403/404/410), an unfollowed redirect, 416, … — is a failure:
@@ -92,7 +110,7 @@ class ResolvingAudioSource extends StreamAudioSource {
     final bool partial = code == HttpStatus.partialContent;
     int? sourceLength;
     if (partial) {
-      final String? cr = resp.headers.value(HttpHeaders.contentRangeHeader);
+      final String? cr = _firstHeader(resp.headers, HttpHeaders.contentRangeHeader);
       if (cr != null && cr.contains('/')) {
         sourceLength = int.tryParse(cr.split('/').last.trim());
       }
@@ -101,7 +119,7 @@ class ResolvingAudioSource extends StreamAudioSource {
     }
     return StreamAudioResponse(
       rangeRequestsSupported: partial ||
-          resp.headers.value(HttpHeaders.acceptRangesHeader) == 'bytes',
+          _firstHeader(resp.headers, HttpHeaders.acceptRangesHeader) == 'bytes',
       sourceLength: sourceLength,
       contentLength: resp.contentLength >= 0 ? resp.contentLength : null,
       offset: start ?? 0,
@@ -126,6 +144,16 @@ class ResolvingAudioSource extends StreamAudioSource {
       stream: file.openRead(from, to),
       contentType: _mimeForPath(path),
     );
+  }
+
+  /// Reads a single header value WITHOUT throwing when the server sent it more
+  /// than once. `HttpHeaders.value()` throws `HttpException: More than one value
+  /// for header …` on duplicates — some CDNs (e.g. Kugou 概念版's fs.youthandroid)
+  /// return `accept-ranges` twice, which otherwise crashed every fetch → the track
+  /// looped on "Source error". Take the first value instead.
+  static String? _firstHeader(HttpHeaders headers, String name) {
+    final List<String>? v = headers[name];
+    return (v != null && v.isNotEmpty) ? v.first : null;
   }
 
   static String _mimeForPath(String path) {

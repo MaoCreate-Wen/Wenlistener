@@ -110,7 +110,7 @@ Future<void> _pumpHome(
       providers: <SingleChildWidget>[
         ChangeNotifierProvider<MusicApiRouter>.value(
           value: MusicApiRouter(
-              migu: MiguApi(), netease: MiguApi(), kugou: MiguApi()),
+              migu: MiguApi(), netease: MiguApi(), kugou: MiguApi(), kugougn: MiguApi(), qqcn: MiguApi()),
         ),
         ChangeNotifierProvider<PlayerProvider>.value(
           value: player ?? _FakePlayerProvider(),
@@ -121,7 +121,7 @@ Future<void> _pumpHome(
         ChangeNotifierProvider<SettingsProvider>(
           create: (_) => SettingsProvider(
             router: MusicApiRouter(
-                migu: MiguApi(), netease: MiguApi(), kugou: MiguApi()),
+                migu: MiguApi(), netease: MiguApi(), kugou: MiguApi(), kugougn: MiguApi(), qqcn: MiguApi()),
             store: SettingsStore(),
             source: MusicSource.netease,
             rhythmEnabled: false,

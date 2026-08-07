@@ -17,6 +17,7 @@ import '../pages/search/search_page.dart';
 import '../pages/settings/settings_page.dart';
 import '../pages/search/search_results_page.dart';
 import '../shell/home_shell.dart';
+import '../widgets/glass_motion.dart';
 import 'routes.dart';
 
 /// The real application route table (replaces the foundation bootstrap).
@@ -52,7 +53,11 @@ class AppRouter {
         curve: Curves.easeOutCubic,
         reverseCurve: Curves.easeInCubic,
       )),
-      child: child,
+      // Cache the full-screen page as ONE layer so the slide only re-composites
+      // (GPU translate) it each frame instead of REPAINTING the whole 1440×3200
+      // page (ArtBackground + cover + controls) every frame — the dominant
+      // raster cost of the push on a 120Hz QHD+ panel (8.3ms budget).
+      child: RepaintBoundary(child: child),
     );
   }
 
@@ -73,6 +78,10 @@ class AppRouter {
   static final GoRouter router = GoRouter(
     navigatorKey: rootNavigatorKey,
     initialLocation: Routes.home,
+    // Drops the shell's glass-bar blur while a route push/pop is animating (the
+    // shell is composited behind the sliding full-screen route), so transitions
+    // don't pay the per-frame BackdropFilter re-blur.
+    observers: <NavigatorObserver>[GlassMotionRouteObserver()],
     routes: <RouteBase>[
       StatefulShellRoute.indexedStack(
         builder: (

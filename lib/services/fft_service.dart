@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -68,6 +69,17 @@ class FftService {
   Future<void> start() async {
     if (_started) return;
     _started = true;
+
+    // Desktop (Windows etc.) has no native Visualizer, no `wenlistener/fft`
+    // EventChannel (that's MainActivity.kt / Android-only), and no Android-style
+    // microphone permission semantics. Short-circuit to the sentinel so
+    // NeonFlowBackground uses its synthetic pulse. NEVER touch the EventChannel
+    // or permission_handler here — both MissingPlugin/throw on desktop.
+    if (!Platform.isAndroid) {
+      lowFreqVolume.value = -1.0;
+      return;
+    }
+
     try {
       final PermissionStatus status = await Permission.microphone.request();
       if (!status.isGranted) {

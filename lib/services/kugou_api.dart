@@ -55,6 +55,12 @@ class KugouApi implements MusicApi {
   /// into search + play requests, which is what unlocks full-song playback.
   KugouAccount? _account;
 
+  /// Fired when a play call for a LOGGED-IN account comes back with the
+  /// login-required signal (`err 30020` / `status:0`) — i.e. the token expired.
+  /// The auth layer drops that account so the QR prompt reappears. Not fired for
+  /// the anonymous case (no account) or a transport error (transient).
+  void Function(String userId)? onSessionExpired;
+
   /// Installs (or clears with null) the active account. Idempotent.
   void setAccount(KugouAccount? account) => _account = account;
 
@@ -248,12 +254,23 @@ class KugouApi implements MusicApi {
         ),
       );
       final Map<String, dynamic> body = _asMap(resp.data);
+      final int status = _int(body['status']);
+      final int err = _int(body['err_code'] ?? body['error_code']);
       final dynamic data = body['data'];
-      if (data is! Map) return null;
-      final String url = _pickUrl(Map<String, dynamic>.from(data));
+      final String url =
+          data is Map ? _pickUrl(Map<String, dynamic>.from(data)) : '';
       // Anonymous → `err 30020` / empty url (Kugou requires a login for playback);
       // returns null so the queue skips to the next playable track, same as a Migu
       // VIP track. Resolves automatically once a Kugou session cookie is present.
+      //
+      // But if we THINK we're logged in (an account is set) and still get the
+      // login-required signal, the token has EXPIRED — notify the auth layer so
+      // it drops the dead account and re-shows the QR prompt instead of silently
+      // skipping every track. Kugou issues no refresh token, so re-scan is the
+      // only recovery.
+      if (_account != null && (err == 30020 || (status == 0 && url.isEmpty))) {
+        onSessionExpired?.call(_account!.userId);
+      }
       if (url.isEmpty) return null;
       return PlayUrl(
         id: song.id,

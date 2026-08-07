@@ -38,11 +38,22 @@ class PlaybackSession {
 /// [Song] is serialised through its public getters and rebuilt via the public
 /// [Song]/[Album]/[Artist] constructors — no model changes. The Migu [Song.ref]
 /// map is persisted whole because Migu playback needs it.
+///
+/// **Never blocks the UI on a big queue.** [save] fires on every track change,
+/// every 5 s of playback and on backgrounding; with a large restored/imported
+/// queue (thousands of tracks) a main-isolate `jsonEncode` there janked the frame
+/// repeatedly. Mirroring [LocalPlaylistStore], the encode now runs in a background
+/// isolate ([compute]) and overlapping writes are coalesced (a save landing while
+/// one is in flight collapses into the next), so persisting a huge queue stays
+/// smooth.
 class PlaybackStore {
   static const String _fileName = 'playback_session.json';
 
   /// Bump when the on-disk shape changes; [load] returns null on a mismatch.
   static const int _version = 1;
+
+  bool _writing = false;
+  Map<String, dynamic>? _queued;
 
   Future<File> _file() async {
     final Directory dir = await getApplicationSupportDirectory();
@@ -89,21 +100,42 @@ class PlaybackStore {
     }
   }
 
-  /// Atomically persists [session] (write to `.tmp`, then rename). Swallows IO
-  /// errors.
+  /// Atomically persists [session] (write to `.tmp`, then rename). The JSON-able
+  /// tree is built here on the UI isolate (cheap map-building), the heavy
+  /// `jsonEncode` is deferred to a background isolate, and overlapping writes are
+  /// coalesced. Swallows IO errors.
   Future<void> save(PlaybackSession session) async {
+    // Build the (cheap) JSON tree synchronously so the snapshot reflects THIS
+    // call's state, then queue it; an in-flight write drains the latest queued
+    // snapshot so a burst of saves collapses to at most one extra write.
+    _queued = <String, dynamic>{
+      'version': _version,
+      'currentIndex': session.currentIndex,
+      'positionMs': session.positionMs,
+      'repeatIndex': session.repeatIndex,
+      'shuffle': session.shuffle,
+      'queue': session.queue.map(_songToJson).toList(),
+    };
+    if (_writing) return; // an in-flight write will drain _queued
+    _writing = true;
+    try {
+      while (_queued != null) {
+        final Map<String, dynamic> next = _queued!;
+        _queued = null;
+        await _write(next);
+      }
+    } finally {
+      _writing = false;
+    }
+  }
+
+  Future<void> _write(Map<String, dynamic> data) async {
     try {
       final File file = await _file();
+      // Serialise off the UI isolate so a huge queue never janks the frame.
+      final String json = await compute(_encodeJson, data);
       final File tmp = File('${file.path}.tmp');
-      final Map<String, dynamic> data = <String, dynamic>{
-        'version': _version,
-        'currentIndex': session.currentIndex,
-        'positionMs': session.positionMs,
-        'repeatIndex': session.repeatIndex,
-        'shuffle': session.shuffle,
-        'queue': session.queue.map(_songToJson).toList(),
-      };
-      await tmp.writeAsString(jsonEncode(data), flush: true);
+      await tmp.writeAsString(json, flush: true);
       await tmp.rename(file.path);
     } catch (e) {
       debugPrint('PlaybackStore.save failed: $e');
@@ -164,7 +196,8 @@ class PlaybackStore {
       });
     }
 
-    final String? sourceName = j['source']?.toString();
+    String? sourceName = j['source']?.toString();
+    if (sourceName == 'kugouGn') sourceName = 'kugougn'; // renamed enum migration
     MusicSource source = MusicSource.netease;
     for (final MusicSource s in MusicSource.values) {
       if (s.name == sourceName) {
@@ -187,6 +220,9 @@ class PlaybackStore {
     );
   }
 }
+
+/// Top-level so it can run in the [compute] isolate (captured closures can't).
+String _encodeJson(Map<String, dynamic> data) => jsonEncode(data);
 
 int _int(dynamic v) {
   if (v is int) return v;

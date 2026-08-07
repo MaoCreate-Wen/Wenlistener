@@ -32,6 +32,18 @@ set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
 # Use Unicode for all projects.
 add_definitions(-DUNICODE -D_UNICODE)
 
+# Force MSVC to read ALL sources (app + every plugin) as UTF-8. Without this,
+# on a non-UTF-8 system locale (e.g. Chinese cp936 on this build machine) MSVC
+# decodes UTF-8 source bytes as the local codepage and raises C4819 for any
+# non-ASCII byte — and because Flutter's APPLY_STANDARD_SETTINGS compiles with
+# /WX (warnings-as-errors), that becomes fatal C2220. This bit some plugins that
+# ship UTF-8 comments (e.g. just_audio_windows/uri_utils.hpp's `→`). Placed
+# before the add_subdirectory / plugin includes below so it propagates to every
+# target. Compiler-read-encoding only — no behavioral change on any platform.
+if(MSVC)
+  add_compile_options("/utf-8")
+endif()
+
 # Compilation settings that should be applied to most targets.
 #
 # Be cautious about adding new options here, as plugins use this function by

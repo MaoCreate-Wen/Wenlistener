@@ -52,6 +52,13 @@ class _PlayerPageState extends State<PlayerPage>
   late FftService _fft;
   bool _fftRunning = false;
 
+  /// LyricsView is mounted (at Opacity 0) once the /player push settles, so its
+  /// one-time cold measure+layout lands on an idle frame — never on the hero
+  /// flight and never on a player↔lyrics morph. Until then the `t>0` guard still
+  /// mounts it if a fast tap-open beats the push completing.
+  bool _lyricsReady = false;
+  bool _lyricsDeferScheduled = false;
+
   @override
   void initState() {
     super.initState();
@@ -65,22 +72,50 @@ class _PlayerPageState extends State<PlayerPage>
       curve: const Cubic(0.25, 0.46, 0.45, 0.94),
       reverseCurve: const Cubic(0.55, 0.06, 0.68, 0.19),
     );
-    _modeCtrl.addListener(_onModeChanged);
+    _modeCtrl.addStatusListener(_onModeStatus);
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     _fft = context.read<FftService>();
+    // Mount LyricsView only after the /player push has fully settled, so its
+    // ~43ms cold measure+layout is paid on an idle frame instead of on the
+    // MiniPlayer→Player hero flight or the first player→lyrics morph frame.
+    if (!_lyricsReady && !_lyricsDeferScheduled) {
+      _lyricsDeferScheduled = true;
+      final Animation<double>? anim = ModalRoute.of(context)?.animation;
+      if (anim == null || anim.isCompleted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() => _lyricsReady = true);
+        });
+      } else {
+        void onStatus(AnimationStatus s) {
+          if (s == AnimationStatus.completed) {
+            anim.removeStatusListener(onStatus);
+            if (mounted) setState(() => _lyricsReady = true);
+          }
+        }
+
+        anim.addStatusListener(onStatus);
+      }
+    }
   }
 
-  void _onModeChanged() {
+  /// Start the native FFT/Visualizer only once the morph has fully SETTLED into
+  /// the lyrics view, and tear it down the instant we start heading back. The
+  /// Visualizer kickoff (mic-permission request + an EventChannel broadcast that
+  /// builds an android.media.audiofx.Visualizer on the platform thread) dropped
+  /// frames when it fired mid-morph (the old value>0.45 threshold sat dead-centre
+  /// of the transition); gating on animation STATUS keeps that native setup off
+  /// the transition entirely.
+  void _onModeStatus(AnimationStatus status) {
     final bool rhythmEnabled =
         context.read<SettingsProvider>().rhythmEnabled;
-    if (_modeCtrl.value > 0.45 && !_fftRunning && rhythmEnabled) {
+    if (status == AnimationStatus.completed && !_fftRunning && rhythmEnabled) {
       _fft.start();
       _fftRunning = true;
-    } else if (_modeCtrl.value <= 0.45 && _fftRunning) {
+    } else if (status != AnimationStatus.completed && _fftRunning) {
       _fft.stop();
       _fftRunning = false;
     }
@@ -89,7 +124,7 @@ class _PlayerPageState extends State<PlayerPage>
   @override
   void dispose() {
     if (_fftRunning) _fft.stop();
-    _modeCtrl.removeListener(_onModeChanged);
+    _modeCtrl.removeStatusListener(_onModeStatus);
     _modeCtrl.dispose();
     super.dispose();
   }
@@ -134,6 +169,7 @@ class _PlayerPageState extends State<PlayerPage>
                     onQueue: () => _showQueue(context),
                     onLike: () => _toggleLike(context),
                     fft: _fft,
+                    lyricsReady: _lyricsReady,
                   )
                 : _EmptyBody(onDismiss: dismiss),
       ),
@@ -423,6 +459,7 @@ class _IntegratedBody extends StatelessWidget {
   final VoidCallback onQueue;
   final VoidCallback onLike;
   final FftService fft;
+  final bool lyricsReady;
 
   const _IntegratedBody({
     required this.modeAnim,
@@ -434,6 +471,7 @@ class _IntegratedBody extends StatelessWidget {
     required this.onQueue,
     required this.onLike,
     required this.fft,
+    required this.lyricsReady,
   });
 
   @override
@@ -448,6 +486,28 @@ class _IntegratedBody extends StatelessWidget {
     final bool rhythmEnabled =
         context.select<SettingsProvider, bool>((s) => s.rhythmEnabled);
 
+    // Backgrounds are built ONCE (hoisted out of the per-tick AnimatedBuilder)
+    // and wrapped in RepaintBoundary so the morph only re-composites their
+    // cached layers instead of repainting the blur / mesh shader every frame.
+    // NeonFlowBackground reads the beat from its ValueListenable internally,
+    // so it stays live without per-frame rebuilds.
+    final Widget artBg = RepaintBoundary(
+      child: ArtBackground(
+        imageUrl: artworkUrl,
+        paletteColors: colors,
+      ),
+    );
+    final Widget neonBg = RepaintBoundary(
+      child: NeonFlowBackground(
+        imageUrl: artworkUrl,
+        colors: colors,
+        playing: playing,
+        lowFreqVolume: fft.lowFreqVolume,
+        reactive: rhythmEnabled,
+        morph: modeAnim,
+      ),
+    );
+
     return Stack(
       fit: StackFit.expand,
       children: <Widget>[
@@ -455,6 +515,12 @@ class _IntegratedBody extends StatelessWidget {
         // ArtBackground (blurred album cover) fades out; NeonFlowBackground
         // fades in. Both wrapped in Positioned.fill as direct Stack children
         // — Positioned.fill inside Opacity breaks Flutter's Stack positioning.
+        // The two children carry STABLE KEYS: at t==1.0 the ArtBackground child
+        // drops, shrinking the list 2→1; without keys Flutter would reconcile
+        // NeonFlowBackground by list position onto the old ArtBackground slot,
+        // tearing down its State (ticker + flow clock) and snapping the flow
+        // back to phase 0 exactly as the morph settles. Keys pin the element
+        // by identity so the neon flow stays continuous across the transition.
         AnimatedBuilder(
           animation: modeAnim,
           builder: (_, __) {
@@ -462,31 +528,57 @@ class _IntegratedBody extends StatelessWidget {
             return Stack(
               fit: StackFit.expand,
               children: <Widget>[
-                // Player-mode blurred cover background.
-                if (t < 1.0)
-                  Positioned.fill(
-                    child: Opacity(
-                      opacity: (1.0 - t).clamp(0.0, 1.0),
-                      child: ArtBackground(
-                        imageUrl: artworkUrl,
-                        paletteColors: colors,
-                      ),
-                    ),
+                // BOTH backgrounds stay PERMANENTLY MOUNTED (no `if` guards) so:
+                //  • the ~40k-vertex BhpMesh + its State (ticker, flow clock,
+                //    texture) are built ONCE on first mount and NEVER torn down —
+                //    the old `if (t > 0.0)` re-created NeonFlowBackground on every
+                //    lyrics-open, re-running a 10–30ms synchronous mesh build AND
+                //    re-fading the mesh layer from 0 over 500ms = the flash.
+                //  • the flow clock is continuous across opens (no phase-0 snap).
+                // Visibility is pure Opacity: RenderOpacity skips painting a
+                // 0-alpha child, so the hidden layer costs no GPU (neon in player
+                // mode, art in lyrics mode).
+                //
+                // Art shows ONLY in player mode (t<=0.02). The neon subtree is a
+                // FULLY OPAQUE background (its _PaletteWash is an opaque gradient
+                // under the mesh), and it snaps to opacity 1.0 at t>0.02 — so for
+                // the entire morph the art would be painted but 100% OCCLUDED
+                // behind the neon: pure wasted full-screen overdraw (a blurred
+                // album image, ~4.6M px) every transition frame, on top of the
+                // mesh's own fill. Dropping it at t>0.02 is a ZERO-visual-change
+                // win (it was already hidden) that halves the background fill
+                // during the morph → only ONE opaque background paints, never two.
+                // Mutually exclusive with the neon's t>0.02 gate, so coverage is
+                // always exactly 1.0 with no dip.
+                Positioned.fill(
+                  key: const ValueKey<String>('art_bg'),
+                  child: Opacity(
+                    opacity: t <= 0.02 ? 1.0 : 0.0,
+                    child: artBg,
                   ),
-                // Lyrics-mode neon-flow background.
-                if (t > 0.0)
-                  Positioned.fill(
-                    child: Opacity(
-                      opacity: t.clamp(0.0, 1.0),
-                      child: NeonFlowBackground(
-                        imageUrl: artworkUrl,
-                        colors: colors,
-                        playing: playing,
-                        lowFreqVolume: fft.lowFreqVolume,
-                        reactive: rhythmEnabled,
-                      ),
-                    ),
+                ),
+                Positioned.fill(
+                  key: const ValueKey<String>('neon_bg'),
+                  child: Opacity(
+                    // BINARY opacity — never a partial alpha. The art background
+                    // stays FULLY OPAQUE underneath for the entire morph (its
+                    // opacity is 1.0 until t==1), so the neon never needs to
+                    // cross-fade; a partial-alpha neon only bought a full-screen
+                    // `saveLayer` that re-encoded the 16k-vertex mesh offscreen
+                    // (measured 12.96ms — the single worst frame of the reverse
+                    // morph, and the peak of the forward one). Snapping 0→1 at
+                    // t>0.02 means RenderOpacity always takes a fast path:
+                    // alpha==0 skips painting the mesh entirely (player mode),
+                    // alpha==255 drops the OpacityLayer so the frozen mesh
+                    // composites straight from its cached RepaintBoundary (lyrics
+                    // mode + whole morph). No offscreen, no re-encode, ever. The
+                    // frozen album-toned mesh appearing instantly over the
+                    // identically album-toned art blur is visually indistinct from
+                    // the old ~28ms fade — the cover is in motion over both.
+                    opacity: t > 0.02 ? 1.0 : 0.0,
+                    child: neonBg,
                   ),
+                ),
               ],
             );
           },
@@ -507,6 +599,7 @@ class _IntegratedBody extends StatelessWidget {
                 availableWidth: c.maxWidth,
                 availableHeight: c.maxHeight,
                 artworkUrl: artworkUrl,
+                lyricsReady: lyricsReady,
               );
             },
           ),
@@ -529,6 +622,7 @@ class _AnimatedLayout extends StatelessWidget {
   final double availableWidth;
   final double availableHeight;
   final String? artworkUrl;
+  final bool lyricsReady;
 
   static const double _headerH = 44.0 + AppDimens.space4 + AppDimens.space8;
   static const double _grabberH = 40.0;
@@ -546,6 +640,7 @@ class _AnimatedLayout extends StatelessWidget {
     required this.availableWidth,
     required this.availableHeight,
     required this.artworkUrl,
+    required this.lyricsReady,
   });
 
   @override
@@ -565,6 +660,31 @@ class _AnimatedLayout extends StatelessWidget {
     const double lyricsCoverLeft = AppDimens.space16;
     const double lyricsCoverTop = _grabberH + AppDimens.space4;
 
+    // Content widgets that consume providers are built ONCE per layout pass
+    // (not per modeAnim tick). They subscribe to their own provider slices and
+    // rebuild only when that data changes — the per-tick AnimatedBuilder below
+    // just re-wraps these same instances in Opacity/Transform, so their heavy
+    // subtrees (AMLL lyric engine, transport controls) are not rebuilt 60×/s
+    // during the morph. RepaintBoundary caches their layers for cheap compositing.
+    final Widget controls = RepaintBoundary(
+      child: _Controls(
+        onMore: onMore,
+        onQueue: onQueue,
+        onLike: onLike,
+      ),
+    );
+    final Widget lyricsTitle = Row(
+      children: <Widget>[
+        Expanded(child: _LyricsTitleColumn()),
+        _ReturnButton(onTap: onCloseLyrics),
+      ],
+    );
+    // Pass the morph clock so the lyric engine FREEZES during the transition
+    // (mutes its per-frame tick + drops blur/glow saveLayers) — the fix for the
+    // 70-80ms/frame lyric re-raster measured on the player↔lyrics morph.
+    final Widget lyricsView =
+        RepaintBoundary(child: LyricsView(morph: modeAnim));
+
     return AnimatedBuilder(
       animation: modeAnim,
       builder: (BuildContext context, Widget? _) {
@@ -583,12 +703,14 @@ class _AnimatedLayout extends StatelessWidget {
           children: <Widget>[
             // 1. Grabber — fixed at top, always goes home.
             Positioned(
+              key: const ValueKey<String>('grabber'),
               top: 0, left: 0, right: 0,
               child: SheetGrabber(onTap: onDismiss),
             ),
             // 2. Lyrics title row (fades in next to small cover).
             if (t > 0)
               Positioned(
+                key: const ValueKey<String>('lyrics_title'),
                 top: lyricsCoverTop,
                 left: lyricsCoverLeft + lyricsCoverSize + AppDimens.space12,
                 right: AppDimens.space16,
@@ -597,18 +719,14 @@ class _AnimatedLayout extends StatelessWidget {
                   opacity: lyricsAlpha,
                   child: IgnorePointer(
                     ignoring: t < 0.5,
-                    child: Row(
-                      children: <Widget>[
-                        Expanded(child: _LyricsTitleColumn()),
-                        _ReturnButton(onTap: onCloseLyrics),
-                      ],
-                    ),
+                    child: lyricsTitle,
                   ),
                 ),
               ),
             // 3. Player controls (fade out).
             if (playerAlpha > 0)
               Positioned(
+                key: const ValueKey<String>('player_controls'),
                 left: 0, right: 0, bottom: 0,
                 child: Opacity(
                   opacity: playerAlpha,
@@ -617,34 +735,45 @@ class _AnimatedLayout extends StatelessWidget {
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
                           horizontal: AppDimens.space24),
-                      child: _Controls(
-                        onMore: onMore,
-                        onQueue: onQueue,
-                        onLike: onLike,
-                      ),
+                      child: controls,
                     ),
                   ),
                 ),
               ),
-            // 4. Lyrics view (fades in + subtle slide from right).
-            if (t > 0)
+            // 4. Lyrics view — mounted at Opacity(0) once the push settles
+            //    (lyricsReady) so its cold measure+layout is paid on an idle
+            //    frame and RETAINED across every morph; RenderOpacity skips PAINT
+            //    at alpha 0 so it costs nothing in player mode. OR-ed with t>0 so
+            //    a tap-open that beats the push completing still mounts it.
+            if (lyricsReady || t > 0)
               Positioned(
+                key: const ValueKey<String>('lyrics_view'),
                 top: _grabberH + _headerH,
                 left: 0, right: 0, bottom: 0,
-                child: Opacity(
-                  opacity: lyricsAlpha,
-                  child: Transform.translate(
-                    offset:
-                        Offset((1.0 - t) * availableWidth * 0.15, 0),
-                    child: IgnorePointer(
-                      ignoring: t < 0.5,
-                      child: const LyricsView(),
-                    ),
+                // NO group Opacity here: LyricsView applies the morph fade
+                // PER LINE (Opacity over each line's RepaintBoundary = a cheap
+                // compositor alpha), avoiding the full-screen offscreen saveLayer
+                // that a whole-view Opacity(lyricsAlpha) costs on Impeller
+                // (~8.6ms/frame). The lines are invisible at t<0.35 (fadeAlpha 0)
+                // so the mounted-in-player-mode view paints nothing.
+                child: Transform.translate(
+                  offset: Offset((1.0 - t) * availableWidth * 0.15, 0),
+                  child: IgnorePointer(
+                    ignoring: t < 0.5,
+                    child: lyricsView,
                   ),
                 ),
               ),
             // 5. Cover — always rendered, animates position/size.
+            //    The STABLE KEY is load-bearing: children 2–4 above are
+            //    conditionally mounted, so this Positioned's index within the
+            //    Stack shifts as `t` crosses thresholds. Without a key Flutter
+            //    reconciles the unkeyed same-type Positioneds by list index and
+            //    reuses this element for a sibling, destroying the pause-scale
+            //    TweenAnimationBuilder's controller → the lift snaps instead of
+            //    animating. The key pins the cover element by identity.
             Positioned(
+              key: const ValueKey<String>('player_cover'),
               top: coverTop,
               left: coverLeft,
               width: coverSize,
@@ -658,11 +787,25 @@ class _AnimatedLayout extends StatelessWidget {
                     final bool playing =
                         ctx.select<PlayerProvider, bool>(
                             (p) => p.isPlaying);
-                    final double scale = t < 0.01
-                        ? (0.72 + 0.28 * (playing ? 1.0 : 0.0))
-                        : 1.0;
-                    return Transform.scale(
-                      scale: scale,
+                    // Pause-lift: cover rests at 0.72 when paused, 1.0 when
+                    // playing. The TweenAnimationBuilder animates ONLY this
+                    // play/pause dip (400ms easeOutCubic) — its State now
+                    // survives rebuilds thanks to the keyed Positioned above.
+                    final double pauseDip = playing ? 1.0 : 0.72;
+                    return TweenAnimationBuilder<double>(
+                      tween: Tween<double>(end: pauseDip),
+                      duration: const Duration(milliseconds: 400),
+                      curve: Curves.easeOutCubic,
+                      builder: (BuildContext _, double dip, Widget? child) =>
+                          Transform.scale(
+                        // Resolve the dip to full size in lockstep with the
+                        // morph `t` (280ms modeAnim), so opening lyrics from a
+                        // paused state doesn't rubber-band between the 400ms dip
+                        // tween and the morph clock — at t==1 the cover is
+                        // always full-size regardless of play/pause.
+                        scale: lerpDouble(dip, 1.0, t)!,
+                        child: child,
+                      ),
                       child: ArtworkImage(
                         url: artworkUrl,
                         size: coverSize,

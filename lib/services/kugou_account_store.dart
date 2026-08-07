@@ -12,12 +12,17 @@ import '../models/kugou_account.dart';
 /// stores). Every IO/parse error is swallowed → falls back to an empty set, so a
 /// corrupt file never blocks startup.
 class KugouAccountStore {
-  static const String _fileName = 'kugou_accounts.json';
   static const int _version = 1;
+
+  /// The on-disk filename. Defaults to the web-Kugou accounts; the 概念版 (Android)
+  /// source persists to a SEPARATE file so the two sources keep independent
+  /// accounts (they log in via different flows — web QR vs 概念版 SMS).
+  final String fileName;
+  const KugouAccountStore({this.fileName = 'kugou_accounts.json'});
 
   Future<File> _file() async {
     final Directory dir = await getApplicationSupportDirectory();
-    return File('${dir.path}/$_fileName');
+    return File('${dir.path}/$fileName');
   }
 
   Future<({List<KugouAccount> accounts, String? activeUserId})> load() async {

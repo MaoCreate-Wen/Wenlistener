@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -24,6 +25,17 @@ class KuwoApi implements MusicApi {
 
   late final Dio _dio;
   final KuwoCookieStore _cookies;
+
+  /// Fired (once the session is confirmed expired) when a LOGGED-IN play request
+  /// resolves to Kuwo's ~180KB placeholder stub instead of the real stream —
+  /// the platform's only "session no longer authorized" signal (it returns no
+  /// error code, just a trial file). The auth layer clears the session so the
+  /// UI re-prompts login. Kuwo issues no refresh token → re-login is required.
+  void Function()? onSessionExpired;
+
+  // Real tracks are multi-MB; the unauthorized stub is ~180KB. A resolved URL
+  // whose Content-Length is below this (but present) is treated as the stub.
+  static const int _stubMaxBytes = 400 * 1024;
 
   KuwoApi({KuwoCookieStore? cookieStore})
       : _cookies = cookieStore ?? KuwoCookieStore() {
@@ -144,6 +156,14 @@ class KuwoApi implements MusicApi {
       );
       final String url = (resp.data ?? '').trim();
       if (url.isEmpty || !url.startsWith('http')) return null;
+      // If we're logged in, verify (in the background, non-blocking) that the
+      // resolved stream is a real track and not the unauthorized stub — an
+      // expired websid still resolves a *valid-looking* URL that points at the
+      // ~180KB placeholder. Playback isn't delayed; a stale session is caught
+      // and cleared so the login prompt reappears.
+      if (_cookies.isLoggedIn) {
+        unawaited(_probeStub(url));
+      }
       return PlayUrl(
         id: song.id,
         url: url,
@@ -153,8 +173,29 @@ class KuwoApi implements MusicApi {
         level: AudioLevel.standard,
       );
     } on DioException catch (e) {
+      // Transport error is transient — never treat it as a session expiry.
       debugPrint('KuwoApi.songUrl failed for rid=$rid: ${e.message}');
       return null;
+    }
+  }
+
+  /// Background HEAD probe: if the resolved stream's Content-Length is present
+  /// and below [_stubMaxBytes], it's Kuwo's unauthorized placeholder → fire
+  /// [onSessionExpired]. A missing/oversized Content-Length or any error is
+  /// treated as "can't tell / real track" and does NOT log the user out.
+  Future<void> _probeStub(String url) async {
+    try {
+      final Response<void> head = await _dio.head<void>(
+        url,
+        options: Options(headers: _headers),
+      );
+      final int? len =
+          int.tryParse(head.headers.value(Headers.contentLengthHeader) ?? '');
+      if (len != null && len > 0 && len < _stubMaxBytes) {
+        onSessionExpired?.call();
+      }
+    } catch (_) {
+      // Ignore — probing must never cause a false logout.
     }
   }
 

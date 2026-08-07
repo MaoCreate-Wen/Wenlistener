@@ -4,7 +4,13 @@ import 'artist.dart';
 /// Which backend a [Song] (and the API call needed to play/lyric it) belongs to.
 /// [local] is an on-device file imported by the user (played from a `file://`
 /// path, not a network backend).
-enum MusicSource { migu, netease, kugou, kuwo, local }
+///
+/// [kugou] is the web (免登录搜索/歌词，播放需登录) surface; [kugouGn] is the **酷狗
+/// 概念版** (com.kugou.android.lite, the native-app signed surface) — a SEPARATE
+/// source with fuller playback. They share one Kugou account/login but route to
+/// different backends, so play/lyric dispatch (which is per-[Song.source]) must
+/// tag 概念版 tracks [kugouGn].
+enum MusicSource { migu, netease, kugou, kugougn, kuwo, local, qqcn }
 
 /// A playable track. Built from a Netease cloudsearch/detail row
 /// ([Song.fromSearchJson]/[Song.fromDetailJson]) or a Migu search row
@@ -151,7 +157,11 @@ class Song {
   /// `FileHash` (used for the lyric lookup and to derive a stable int [id]); both
   /// live in [ref]. [id] is derived from the hash so all the int-keyed plumbing
   /// (url cache, likes, local-playlist rows) keeps working across launches.
-  factory Song.fromKugouJson(Map<String, dynamic> json) {
+  /// [source] lets the 概念版 (Android) backend tag its rows [MusicSource.kugouGn]
+  /// while the web backend keeps the default [MusicSource.kugou] — both share this
+  /// row shape but must dispatch play/lyric to their own backend.
+  factory Song.fromKugouJson(Map<String, dynamic> json,
+      {MusicSource source = MusicSource.kugou}) {
     final String mixId = _str(json['EMixSongID'] ?? json['emixsongid']);
     final String hash = _str(json['FileHash'] ??
             json['SQFileHash'] ??
@@ -195,7 +205,7 @@ class Song {
           Duration(seconds: _int(json['Duration'] ?? json['duration'] ?? json['TimeLength'])),
       fee: 0,
       playable: true,
-      source: MusicSource.kugou,
+      source: source,
       ref: <String, String>{
         if (mixId.isNotEmpty) 'albumAudioId': mixId,
         if (hash.isNotEmpty) 'hash': hash,
@@ -319,7 +329,12 @@ class Song {
     }
 
     MusicSource source = MusicSource.netease;
-    final String? sn = j['source']?.toString();
+    // Migration aliases for enum values persisted under older names.
+    const Map<String, String> sourceAliases = <String, String>{
+      'kugouGn': 'kugougn', // renamed kugouGn → kugougn
+    };
+    String? sn = j['source']?.toString();
+    if (sn != null) sn = sourceAliases[sn] ?? sn;
     for (final MusicSource s in MusicSource.values) {
       if (s.name == sn) {
         source = s;

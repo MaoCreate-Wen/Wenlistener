@@ -14,6 +14,8 @@ import 'services/cookie_store.dart';
 import 'services/fft_service.dart';
 import 'services/kugou_account_store.dart';
 import 'services/kugou_api.dart';
+import 'services/kugougn_account_store.dart';
+import 'services/kugougn_api.dart';
 import 'services/kuwo_api.dart';
 import 'services/kuwo_cookie_store.dart';
 import 'services/local_music_scanner.dart';
@@ -23,12 +25,17 @@ import 'services/netease_api.dart';
 import 'services/netease_crypto.dart';
 import 'services/qq_api.dart';
 import 'services/qq_cookie_store.dart';
+import 'services/qqcn_api.dart';
+import 'services/qqcn_cookie_store.dart';
+import 'shell/desktop/desktop_window_frame.dart';
 import 'state/auth_provider.dart';
 import 'state/kugou_auth_provider.dart';
+import 'state/kugougn_auth_provider.dart';
 import 'state/kuwo_auth_provider.dart';
 import 'state/library_provider.dart';
 import 'state/local_playlist_provider.dart';
 import 'state/qq_auth_provider.dart';
+import 'state/qqcn_auth_provider.dart';
 import 'state/player_provider.dart';
 import 'state/search_provider.dart';
 import 'state/settings_provider.dart';
@@ -45,7 +52,10 @@ class WenListenerApp extends StatelessWidget {
   final NeteaseApi neteaseApi;
   final QqApi qqApi;
   final QqCookieStore qqCookies;
+  final QqcnApi qqcnApi;
+  final QqcnCookieStore qqcnCookies;
   final KugouApi kugouApi;
+  final KugougnApi kugougnApi;
   final KuwoApi kuwoApi;
   final KuwoCookieStore kuwoCookies;
   final MusicApiRouter musicApi;
@@ -62,7 +72,10 @@ class WenListenerApp extends StatelessWidget {
     required this.neteaseApi,
     required this.qqApi,
     required this.qqCookies,
+    required this.qqcnApi,
+    required this.qqcnCookies,
     required this.kugouApi,
+    required this.kugougnApi,
     required this.kuwoApi,
     required this.kuwoCookies,
     required this.musicApi,
@@ -136,8 +149,31 @@ class WenListenerApp extends StatelessWidget {
             router: musicApi,
           ),
         ),
-        // QQ Music login (replaces Migu). Eager so a restored session validates at
-        // startup; QQ needs a login for everything, so this gates the whole source.
+        // 酷狗概念版 (kugougn) — a SEPARATE source with its OWN account, signed in by
+        // mobile-number + SMS code. Eager so a persisted account is re-installed
+        // into KugougnApi at startup.
+        Provider<KugougnApi>.value(value: kugougnApi),
+        ChangeNotifierProvider<KugougnAuthProvider>(
+          lazy: false,
+          create: (_) => KugougnAuthProvider(
+            api: kugougnApi,
+            store: KugougnAccountStore(),
+            router: musicApi,
+          ),
+        ),
+        // QQ 音乐（安卓客户端）— INDEPENDENT `qqcn` source, its own cookie session.
+        // Eager so a restored session validates at startup.
+        Provider<QqcnApi>.value(value: qqcnApi),
+        ChangeNotifierProvider<QqcnAuthProvider>(
+          lazy: false,
+          create: (_) => QqcnAuthProvider(
+            api: qqcnApi,
+            cookies: qqcnCookies,
+            router: musicApi,
+          ),
+        ),
+        // Web QQ (`migu` slot, dormant rollback). Eager so a restored session
+        // validates at startup, consistent with the desktop wiring.
         ChangeNotifierProvider<QqAuthProvider>(
           lazy: false,
           create: (_) => QqAuthProvider(
@@ -165,6 +201,11 @@ class WenListenerApp extends StatelessWidget {
           debugShowCheckedModeBanner: false,
           theme: AppTheme.dark(),
           routerConfig: AppRouter.router,
+          // Desktop-only: pin the custom frameless title bar above every route
+          // (shell AND full-screen pushed routes) so window controls stay
+          // reachable. Pure pass-through on mobile/web — Android tree untouched.
+          builder: (BuildContext context, Widget? child) =>
+              DesktopWindowFrame(child: child ?? const SizedBox.shrink()),
         ),
       ),
     );

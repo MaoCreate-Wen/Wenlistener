@@ -33,6 +33,9 @@ class AuthProvider extends ChangeNotifier with WidgetsBindingObserver {
   }) : _store = accountStore ??
             const CookieAccountStore('netease_accounts.json') {
     _isLoggedIn = cookies.isLoggedIn;
+    // React to a mid-session expiry: any authed call that comes back 301/20001
+    // fires this, and we try a silent renewal before dropping to logged-out.
+    api.onSessionExpired = _onSessionExpired;
     WidgetsBinding.instance.addObserver(this);
     // Load the saved account set, then validate a *restored* session against the
     // server on startup. A MUSIC_U present in the jar may be stale (expired /
@@ -78,6 +81,10 @@ class AuthProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// Guards the timed loop and [pollNow] from issuing overlapping polls.
   bool _pollInFlight = false;
 
+  /// Guards [_onSessionExpired] so a burst of 301s (many authed calls failing at
+  /// once) triggers only one renewal/logout cycle.
+  bool _reauthInFlight = false;
+
   bool get isLoggedIn => _isLoggedIn;
 
   /// The signed-in account (uid / nickname / avatar / vipType) once a profile
@@ -105,15 +112,27 @@ class AuthProvider extends ChangeNotifier with WidgetsBindingObserver {
     _isLoggedIn = cookies.isLoggedIn; // authoritative: MUSIC_U present
     if (_isLoggedIn) {
       try {
-        final NeteaseAccount? acct = await api.accountProfile(); // caches uid
+        NeteaseAccount? acct = await api.accountProfile(); // caches uid
         if (acct == null) {
           // Server cleanly reports not-logged-in (e.g. an expired restored
-          // session) → drop the stale cookies and fall back to the anonymous
-          // Migu default, so the UI reflects logged-out and prompts a re-scan
-          // instead of silently failing every authed call.
-          await cookies.clear();
-          _account = null;
-          _isLoggedIn = false;
+          // session). Before giving up, try a SILENT renewal with the refresh
+          // token (MUSIC_R_T in the jar) — if it works the session continues
+          // without a re-scan and the user never sees an interruption.
+          final bool renewed = await api.refreshSession();
+          if (renewed) {
+            acct = await api.accountProfile();
+          }
+          if (acct == null) {
+            // Renewal impossible/failed → drop the stale cookies so the UI
+            // reflects logged-out and prompts a re-scan instead of silently
+            // failing every authed call.
+            await cookies.clear();
+            _account = null;
+            _isLoggedIn = false;
+          } else {
+            _account = acct;
+            _isLoggedIn = true;
+          }
         } else {
           _account = acct;
         }
@@ -134,6 +153,27 @@ class AuthProvider extends ChangeNotifier with WidgetsBindingObserver {
     // now-cached uid) without changing the source.
     router.refresh();
     notifyListeners();
+  }
+
+  /// Handles a server-signalled session expiry (301/20001 from an authed call).
+  /// First attempts a SILENT renewal via the refresh token (no user action); if
+  /// that succeeds the session continues seamlessly. Only when renewal fails do
+  /// we re-validate and, on a clean not-logged-in, drop the dead cookies so the
+  /// UI shows the QR prompt again. Debounced by [_reauthInFlight] so a burst of
+  /// failing calls doesn't spawn overlapping cycles. Skipped while a QR login is
+  /// already in flight.
+  Future<void> _onSessionExpired() async {
+    if (_reauthInFlight || _polling || !_isLoggedIn) return;
+    _reauthInFlight = true;
+    try {
+      // refreshLoginState attempts the silent renewal itself, then drops to
+      // logged-out only if the session is genuinely dead.
+      await refreshLoginState();
+    } catch (e) {
+      debugPrint('AuthProvider._onSessionExpired error: $e');
+    } finally {
+      _reauthInFlight = false;
+    }
   }
 
   /// Snapshots the live jar + the fetched profile into the saved-account set
@@ -282,8 +322,15 @@ class AuthProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _polling) {
+    if (state != AppLifecycleState.resumed) return;
+    if (_polling) {
+      // Mid QR-scan: catch the 803 that landed while backgrounded.
       unawaited(pollNow());
+    } else if (_isLoggedIn && !_reauthInFlight) {
+      // Not scanning: re-validate the restored session on every foreground so an
+      // expiry that happened while backgrounded is caught (and silently renewed
+      // if possible) before the user hits a silently-failing authed call.
+      unawaited(refreshLoginState());
     }
   }
 

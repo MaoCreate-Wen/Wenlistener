@@ -4,15 +4,16 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
-import '../../models/qq_login.dart';
-import '../../state/qq_auth_provider.dart';
+import '../../models/qqcn_login.dart';
+import '../../state/qqcn_auth_provider.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_dimens.dart';
 import '../../theme/app_typography.dart';
 
-/// Full-screen QQ Music scan-login. Offers BOTH methods (微信 / QQ, per
-/// QQMUSIC_API.md) via a toggle; auto-starts on init, and on confirmation the
-/// [QqAuthProvider] finishes the OAuth handoff and this pops.
+/// Full-screen QQ 音乐 (Android) scan-login. ONE ptlogin QR — mobile QQ AND WeChat
+/// scan the SAME code (no method toggle). Auto-starts on init; on confirmation the
+/// [QqcnAuthProvider] runs the OAuth → QQLogin → GetSession handoff and this
+/// pops.
 class QqQrLoginPage extends StatefulWidget {
   const QqQrLoginPage({super.key});
 
@@ -23,37 +24,27 @@ class QqQrLoginPage extends StatefulWidget {
 class _QqQrLoginPageState extends State<QqQrLoginPage> {
   static const double _qrSize = 220;
 
-  QqAuthProvider? _auth;
-  QqLoginMethod _method = QqLoginMethod.wechat;
+  QqcnAuthProvider? _auth;
   bool _handled = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) context.read<QqAuthProvider>().startLogin(_method);
+      if (mounted) context.read<QqcnAuthProvider>().startLogin(QqcnLoginMethod.qq);
     });
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _auth = context.read<QqAuthProvider>();
+    _auth = context.read<QqcnAuthProvider>();
   }
 
   @override
   void dispose() {
     _auth?.cancelLogin();
     super.dispose();
-  }
-
-  void _setMethod(QqLoginMethod m) {
-    if (m == _method) return;
-    setState(() {
-      _method = m;
-      _handled = false;
-    });
-    context.read<QqAuthProvider>().startLogin(m);
   }
 
   void _onConfirmed() {
@@ -68,8 +59,8 @@ class _QqQrLoginPageState extends State<QqQrLoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    final QqAuthProvider auth = context.watch<QqAuthProvider>();
-    if (auth.qrStatus == QqQrStatus.confirmed && auth.isLoggedIn) {
+    final QqcnAuthProvider auth = context.watch<QqcnAuthProvider>();
+    if (auth.qrStatus == QqcnQrStatus.confirmed && auth.isLoggedIn) {
       _onConfirmed();
     }
 
@@ -97,17 +88,13 @@ class _QqQrLoginPageState extends State<QqQrLoginPage> {
               children: <Widget>[
                 const Text('扫码登录 QQ音乐', style: AppTypography.displayM),
                 const SizedBox(height: AppDimens.space12),
-                Text(
-                  _method == QqLoginMethod.wechat
-                      ? '用微信「扫一扫」，登录后可搜索与播放'
-                      : '打开手机 QQ「扫一扫」，登录后可搜索与播放',
+                const Text(
+                  '用手机 QQ 或 微信「扫一扫」，登录后可播放完整歌曲',
                   style: AppTypography.label,
                   textAlign: TextAlign.center,
                 ),
-                const SizedBox(height: AppDimens.space20),
-                _MethodToggle(method: _method, onChanged: _setMethod),
                 const SizedBox(height: AppDimens.space24),
-                _QrPanel(size: _qrSize, auth: auth, method: _method),
+                _QrPanel(size: _qrSize, auth: auth),
                 const SizedBox(height: AppDimens.space20),
                 _StatusLine(
                   status: auth.qrStatus,
@@ -126,10 +113,9 @@ class _QqQrLoginPageState extends State<QqQrLoginPage> {
 
 class _QrPanel extends StatelessWidget {
   final double size;
-  final QqAuthProvider auth;
-  final QqLoginMethod method;
+  final QqcnAuthProvider auth;
 
-  const _QrPanel({required this.size, required this.auth, required this.method});
+  const _QrPanel({required this.size, required this.auth});
 
   @override
   Widget build(BuildContext context) {
@@ -148,15 +134,15 @@ class _QrPanel extends StatelessWidget {
   }
 
   Widget _content(BuildContext context) {
-    if (auth.qrStatus == QqQrStatus.confirmed && auth.isLoggedIn) {
+    if (auth.qrStatus == QqcnQrStatus.confirmed && auth.isLoggedIn) {
       return const Icon(Icons.check_circle_rounded,
           color: AppColors.accentPlay, size: 48);
     }
-    if (auth.qrStatus == QqQrStatus.expired ||
-        auth.qrStatus == QqQrStatus.canceled) {
+    if (auth.qrStatus == QqcnQrStatus.expired ||
+        auth.qrStatus == QqcnQrStatus.canceled) {
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () => context.read<QqAuthProvider>().startLogin(method),
+        onTap: () => context.read<QqcnAuthProvider>().startLogin(QqcnLoginMethod.qq),
         child: const Icon(Icons.refresh_rounded, color: AppColors.bg, size: 40),
       );
     }
@@ -172,59 +158,8 @@ class _QrPanel extends StatelessWidget {
   }
 }
 
-class _MethodToggle extends StatelessWidget {
-  final QqLoginMethod method;
-  final ValueChanged<QqLoginMethod> onChanged;
-
-  const _MethodToggle({required this.method, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceGlass,
-        borderRadius: BorderRadius.circular(AppDimens.radiusPill),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          _seg('微信扫码', QqLoginMethod.wechat),
-          _seg('QQ扫码', QqLoginMethod.qq),
-        ],
-      ),
-    );
-  }
-
-  Widget _seg(String label, QqLoginMethod m) {
-    final bool active = m == method;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => onChanged(m),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 9),
-        decoration: BoxDecoration(
-          color: active
-              ? AppColors.onSurface.withValues(alpha: 0.16)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(AppDimens.radiusPill),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-            color: active ? AppColors.onSurface : AppColors.onSurfaceMuted,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _StatusLine extends StatelessWidget {
-  final QqQrStatus status;
+  final QqcnQrStatus status;
   final bool loading;
   final bool isLoggedIn;
   final bool finishing;
@@ -251,18 +186,17 @@ class _StatusLine extends StatelessWidget {
     if (loading) return '正在生成二维码…';
     if (finishing) return '扫码成功，正在完成登录…';
     switch (status) {
-      case QqQrStatus.waiting:
+      case QqcnQrStatus.waiting:
         return '等待扫描';
-      case QqQrStatus.scanned:
+      case QqcnQrStatus.scanned:
         return '已扫描 — 请在手机上确认';
-      case QqQrStatus.confirmed:
-        // Scan confirmed but the OAuth handoff didn't land a session cookie.
+      case QqcnQrStatus.confirmed:
         return isLoggedIn ? '登录成功' : '登录未完成（未获取到会话），请重试';
-      case QqQrStatus.expired:
+      case QqcnQrStatus.expired:
         return '二维码已过期，点击刷新';
-      case QqQrStatus.canceled:
+      case QqcnQrStatus.canceled:
         return '已取消，点击刷新';
-      case QqQrStatus.unknown:
+      case QqcnQrStatus.unknown:
         return '正在生成二维码…';
     }
   }

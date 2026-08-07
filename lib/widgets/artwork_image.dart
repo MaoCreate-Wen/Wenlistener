@@ -38,12 +38,26 @@ class ArtworkImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final double r = radius ?? AppDimens.albumRadius(size);
+    // Downsample the decode for standalone (non-Hero) thumbnails — the list /
+    // grid / carousel covers that dominate the startup and scroll high-water:
+    // dozens of them decode a full-resolution (often ~1000²≈4 MB) bitmap just to
+    // paint a ~56 px cell. Cap the decode at the display size in device pixels.
+    // Hero covers (mini-player ↔ player ↔ lyrics share the `album_art` tag) are
+    // deliberately LEFT at full resolution: their seamless, pixel-identical
+    // flight relies on all three endpoints resolving the *same*
+    // CachedNetworkImageProvider key, which a per-size ResizeImage would break
+    // (re-decode + skeleton flash mid-flight). One full-res decode for the
+    // current song, shared across the trio, is not a peak driver.
+    final int? decodeSize = heroTag == null
+        ? (size * MediaQuery.devicePixelRatioOf(context)).round()
+        : null;
     final Widget child = _ArtworkHeroChild(
       url: url,
       size: size,
       resolvedRadius: r,
       fit: fit,
       shadow: shadow,
+      decodeSize: decodeSize,
     );
     if (heroTag == null) return child;
     return Hero(
@@ -93,21 +107,21 @@ class ArtworkImage extends StatelessWidget {
         builder: (BuildContext context, Widget? _) {
           final double t = Curves.easeInOut.transform(animation.value);
           final double r = lerpDouble(a.resolvedRadius, b.resolvedRadius, t)!;
-          final List<BoxShadow>? base = b.shadow ?? a.shadow;
-          final List<BoxShadow>? sh = base == null
-              ? null
-              : <BoxShadow>[
-                  for (final BoxShadow s in base)
-                    s.copyWith(
-                      color: s.color.withValues(alpha: s.color.a * t),
-                    ),
-                ];
+          // No drop shadow DURING the flight: a blurRadius-28 BoxShadow is a
+          // Gaussian blur of the cover silhouette re-rasterized every frame over a
+          // rect growing to ~380px — the dominant per-frame raster cost of the
+          // ~340ms flight (the old code faded only the alpha, `color.a * t`, while
+          // still paying the full blur even when it was invisible). The shadow
+          // reappears the instant the flight settles: the static _ArtworkHeroChild
+          // built by ArtworkImage carries player_page's shadow, so only the
+          // mid-zoom frames — where a fading, half-scaled shadow is barely visible
+          // — are exempt.
           return _ArtworkHeroChild(
             url: b.url,
             size: b.size,
             resolvedRadius: r,
             fit: b.fit,
-            shadow: sh,
+            shadow: null,
             expand: true,
           );
         },
@@ -127,6 +141,7 @@ class _ArtworkHeroChild extends StatelessWidget {
     required this.resolvedRadius,
     required this.fit,
     required this.shadow,
+    this.decodeSize,
     this.expand = false,
   });
 
@@ -135,17 +150,31 @@ class _ArtworkHeroChild extends StatelessWidget {
   final double resolvedRadius;
   final BoxFit fit;
   final List<BoxShadow>? shadow;
+
+  /// When non-null, decode the cover at this pixel size (via [ResizeImage])
+  /// instead of the network original. Set only for standalone thumbnails; left
+  /// null for Hero covers so the shared-provider flight stays pixel-identical.
+  final int? decodeSize;
   final bool expand;
 
   @override
   Widget build(BuildContext context) {
     final bool hasUrl = url != null && url!.isNotEmpty;
+    ImageProvider? provider;
+    if (hasUrl) {
+      provider = CachedNetworkImageProvider(url!, headers: kNeteaseImageHeaders);
+      if (decodeSize != null && decodeSize! > 0) {
+        provider = ResizeImage(
+          provider,
+          width: decodeSize,
+          height: decodeSize,
+          allowUpscaling: false,
+        );
+      }
+    }
     final Widget inner = hasUrl
         ? Image(
-            image: CachedNetworkImageProvider(
-              url!,
-              headers: kNeteaseImageHeaders,
-            ),
+            image: provider!,
             fit: fit,
             width: expand ? null : size,
             height: expand ? null : size,
@@ -170,6 +199,12 @@ class _ArtworkHeroChild extends StatelessWidget {
 
     Widget clipped = ClipRRect(
       borderRadius: BorderRadius.circular(resolvedRadius),
+      // Antialiased rounded clip runs an AA edge pass that scales with area and
+      // repaints every flight frame over a rect growing to ~380px. Hard-edge
+      // skips the AA saveLayer during the fast 340ms zoom (aliased corners are
+      // imperceptible in motion); static endpoints keep antiAlias for crisp
+      // resting corners.
+      clipBehavior: expand ? Clip.hardEdge : Clip.antiAlias,
       child: expand
           ? SizedBox.expand(child: inner)
           : SizedBox(width: size, height: size, child: inner),
