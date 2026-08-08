@@ -35,11 +35,18 @@ class Routes {
   static const String settings = '/settings';
   static const String playlist = '/playlist/:id';
 
+  /// Album detail (route reuses [PlaylistPage] with `isAlbum: true`). Album id is a
+  /// SEPARATE id space from playlists (an albumid and a listid can collide), so it
+  /// gets its own path/cache.
+  static const String album = '/album/:id';
+
   /// Local ("共同歌单") playlist detail. Its id is an opaque `lp_…` STRING (not an
   /// int), kept distinct from the backend [playlist] route above.
   static const String localPlaylist = '/local/:id';
 
   static String playlistPath(int id) => '/playlist/$id';
+
+  static String albumPath(int id) => '/album/$id';
 
   static String localPlaylistPath(String id) => '/local/$id';
 
@@ -57,6 +64,7 @@ class Routes {
   static const String nAccounts = 'accounts';
   static const String nSettings = 'settings';
   static const String nPlaylist = 'playlist';
+  static const String nAlbum = 'album';
   static const String nLocalPlaylist = 'localPlaylist';
 
   // Bottom-nav tab order.

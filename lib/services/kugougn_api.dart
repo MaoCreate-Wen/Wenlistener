@@ -1465,9 +1465,19 @@ class KugougnApi implements MusicApi {
       }
       final String name = _stripTags(_str(
           data['album_name'] ?? data['albumname'] ?? resp['album_name']));
+      // 专辑封面：先取响应顶层封面键（可能带 {size} 占位符），取不到回落第一首歌封面。
+      final String coverRaw = _str(data['imgurl'] ??
+          data['img'] ??
+          data['sizable_cover'] ??
+          data['album_sizable_cover'] ??
+          resp['imgurl']);
+      final String? albumCover = coverRaw.isNotEmpty
+          ? _httpsPic(coverRaw.replaceAll('{size}', '480'))
+          : (tracks.isNotEmpty ? tracks.first.artworkUrl : null);
       return Playlist(
         id: id,
         name: name.isEmpty ? '专辑' : name,
+        coverUrl: albumCover,
         trackCount: tracks.length,
         tracks: tracks,
       );
@@ -1476,6 +1486,14 @@ class KugougnApi implements MusicApi {
       return null;
     }
   }
+
+  /// Public album detail for the shared [MusicApi.albumDetail] path (route
+  /// `/album/:id`). Wraps the private [_albumDetail] (also used by [playlistDetail]
+  /// as its non-playlist fallback), degrading to an empty album on failure.
+  @override
+  Future<Playlist> albumDetail(int id) async =>
+      await _albumDetail(id) ??
+      Playlist(id: id, name: '专辑', tracks: const <Song>[]);
 
   /// BARE GET (no KG-* headers, standard mobile UA) + JSON decode — for the
   /// classic public `mobilecdn.kugou.com` endpoints, which return `{}` when hit

@@ -82,6 +82,10 @@ class LocalMusicApi implements MusicApi {
   Future<List<Song>> recommendedSongs({int limit = 8}) async => const <Song>[];
 
   @override
+  Future<Playlist> albumDetail(int id) async =>
+      Playlist(id: id, name: '专辑', tracks: const <Song>[]);
+
+  @override
   Future<Playlist> playlistDetail(int id) =>
       throw LocalMusicApiException('local music has no playlists');
 

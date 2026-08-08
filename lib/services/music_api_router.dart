@@ -148,6 +148,12 @@ class MusicApiRouter extends ChangeNotifier implements MusicApi {
   @override
   Future<Playlist> playlistDetail(int id) => active.playlistDetail(id);
 
+  // Album detail dispatches to the ACTIVE source — a searched album is opened
+  // while browsing that source, so active == the album's source. Sources without
+  // album support return an empty Playlist.
+  @override
+  Future<Playlist> albumDetail(int id) => active.albumDetail(id);
+
   /// Fetches a playlist from a SPECIFIC backend (not the active source) — used to
   /// re-sync a local "共同歌单" against the remote it was forked from, regardless of
   /// which source the UI is currently on.

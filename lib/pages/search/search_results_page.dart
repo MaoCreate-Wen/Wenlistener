@@ -201,7 +201,7 @@ class _ResultsList extends StatelessWidget {
           title: album.name,
           artist: 'Album',
           artworkUrl: album.picUrl,
-          onTap: () => context.push(Routes.playlistPath(album.id)),
+          onTap: () => context.push(Routes.albumPath(album.id)),
         );
       case SearchType.artist:
         final Artist artist = result.artists[index];

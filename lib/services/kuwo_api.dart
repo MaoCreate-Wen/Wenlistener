@@ -257,6 +257,10 @@ class KuwoApi implements MusicApi {
   // ─── Playlist ─────────────────────────────────────────────────────────────
 
   @override
+  Future<Playlist> albumDetail(int id) async =>
+      Playlist(id: id, name: '专辑', tracks: const <Song>[]);
+
+  @override
   Future<Playlist> playlistDetail(int id) async {
     try {
       final Response<String> resp = await _dio.get<String>(

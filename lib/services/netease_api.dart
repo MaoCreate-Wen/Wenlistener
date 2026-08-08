@@ -409,6 +409,10 @@ class NeteaseApi implements MusicApi {
   }
 
   @override
+  Future<Playlist> albumDetail(int id) async =>
+      Playlist(id: id, name: '专辑', tracks: const <Song>[]);
+
+  @override
   Future<Playlist> playlistDetail(int id) => _fetchPlaylist(id, fetchAll: true);
 
   /// Fetches v6/playlist/detail and assembles the playlist. With [fetchAll] the

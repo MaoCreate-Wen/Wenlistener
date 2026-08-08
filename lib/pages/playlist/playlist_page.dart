@@ -27,7 +27,17 @@ const double _kExpandedAppBarHeight = 360;
 class PlaylistPage extends StatefulWidget {
   final int playlistId;
 
-  const PlaylistPage({required this.playlistId, super.key});
+  /// When true this same page renders an ALBUM (route `/album/:id`): it loads via
+  /// [LibraryProvider.loadAlbum] instead of loadPlaylist and hides the playlist-only
+  /// actions (收藏 / 导入到本地歌单 / 我喜欢的音乐 seeding). Album id is a separate id
+  /// space from playlists, so it reads the album cache.
+  final bool isAlbum;
+
+  const PlaylistPage({
+    required this.playlistId,
+    this.isAlbum = false,
+    super.key,
+  });
 
   @override
   State<PlaylistPage> createState() => _PlaylistPageState();
@@ -71,14 +81,21 @@ class _PlaylistPageState extends State<PlaylistPage> {
   Future<void> _load() async {
     if (!mounted) return;
     final LibraryProvider library = context.read<LibraryProvider>();
-    if (library.playlist(widget.playlistId) != null) {
-      _markLikedIfLikedPlaylist(library);
+    final Playlist? has = widget.isAlbum
+        ? library.album(widget.playlistId)
+        : library.playlist(widget.playlistId);
+    if (has != null) {
+      if (!widget.isAlbum) _markLikedIfLikedPlaylist(library);
       return;
     }
     if (_error) setState(() => _error = false);
     try {
-      await library.loadPlaylist(widget.playlistId);
-      if (mounted) _markLikedIfLikedPlaylist(library);
+      if (widget.isAlbum) {
+        await library.loadAlbum(widget.playlistId);
+      } else {
+        await library.loadPlaylist(widget.playlistId);
+        if (mounted) _markLikedIfLikedPlaylist(library);
+      }
     } catch (e) {
       debugPrint('PlaylistPage load failed: $e');
       if (mounted) setState(() => _error = true);
@@ -218,7 +235,9 @@ class _PlaylistPageState extends State<PlaylistPage> {
   @override
   Widget build(BuildContext context) {
     final LibraryProvider library = context.watch<LibraryProvider>();
-    final Playlist? cached = library.playlist(widget.playlistId);
+    final Playlist? cached = widget.isAlbum
+        ? library.album(widget.playlistId)
+        : library.playlist(widget.playlistId);
     // Retain the last loaded detail so a cache drop (collect invalidation)
     // doesn't fall back to the skeleton; the optimistic [_collected] still
     // reflects the toggle.
@@ -243,11 +262,13 @@ class _PlaylistPageState extends State<PlaylistPage> {
                 collected: _collected,
                 searchActive: _searchActive,
                 onToggleSearch: playlist == null ? null : _toggleSearch,
-                onToggleCollect: _toggleCollect,
+                // 专辑没有「收藏 / 导入到本地歌单」概念 —— 传 null 隐藏这两个动作。
+                onToggleCollect: widget.isAlbum ? null : _toggleCollect,
                 onPlayAll:
                     playlist == null ? null : () => _playAll(playlist.tracks),
-                onImport:
-                    playlist == null ? null : () => _importToLocal(playlist),
+                onImport: widget.isAlbum || playlist == null
+                    ? null
+                    : () => _importToLocal(playlist),
                 onBack: () {
                   if (context.canPop()) context.pop();
                 },
@@ -376,7 +397,7 @@ class _PlaylistAppBar extends StatelessWidget {
   final bool? collected;
   final bool searchActive;
   final VoidCallback? onToggleSearch;
-  final Future<void> Function(Playlist) onToggleCollect;
+  final Future<void> Function(Playlist)? onToggleCollect;
   final VoidCallback? onPlayAll;
   final VoidCallback? onImport;
   final VoidCallback onBack;
@@ -431,7 +452,7 @@ class _PlaylistAppBar extends StatelessWidget {
                 color: AppColors.onSurface),
             onPressed: onImport,
           ),
-        if (pl != null)
+        if (pl != null && onToggleCollect != null)
           IconButton(
             tooltip: isCollected ? '取消收藏' : '收藏',
             icon: Icon(
@@ -440,7 +461,7 @@ class _PlaylistAppBar extends StatelessWidget {
                   : Icons.favorite_border_rounded,
               color: isCollected ? accent : AppColors.onSurface,
             ),
-            onPressed: () => onToggleCollect(pl),
+            onPressed: () => onToggleCollect!(pl),
           ),
       ],
       flexibleSpace: FlexibleSpaceBar(

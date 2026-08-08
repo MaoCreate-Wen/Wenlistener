@@ -495,6 +495,10 @@ class KugouApi implements MusicApi {
   }
 
   @override
+  Future<Playlist> albumDetail(int id) async =>
+      Playlist(id: id, name: '专辑', tracks: const <Song>[]);
+
+  @override
   Future<Playlist> playlistDetail(int id) {
     throw KugouApiException('Kugou has no playlist detail support');
   }

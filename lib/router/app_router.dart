@@ -224,6 +224,15 @@ class AppRouter {
         ),
       ),
       GoRoute(
+        path: Routes.album, // '/album/:id' — same page, album mode
+        name: Routes.nAlbum,
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (BuildContext context, GoRouterState state) => PlaylistPage(
+          playlistId: int.tryParse(state.pathParameters['id'] ?? '') ?? 0,
+          isAlbum: true,
+        ),
+      ),
+      GoRoute(
         path: Routes.localPlaylist, // '/local/:id'
         name: Routes.nLocalPlaylist,
         parentNavigatorKey: rootNavigatorKey,

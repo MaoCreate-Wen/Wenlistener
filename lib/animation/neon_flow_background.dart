@@ -379,6 +379,29 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
     });
   }
 
+  /// Process-wide cache of built mesh GEOMETRY keyed by control-point preset. The
+  /// ~40k-vertex mesh is **album-independent** (pure warped geometry; the album
+  /// enters only via [MeshLayer.texture]), so a fresh `BhpMesh.fromPreset` on every
+  /// player open / track change re-ran ~40k-vertex + 237k-index construction
+  /// (~1.3MB typed arrays, several ms on the UI thread) for fully reusable geometry.
+  /// The curated presets stay resident (hit forever); the rare generated grid is
+  /// bounded FIFO by [_kMeshGeoCap]. Immutable + read-only ⇒ any number of layers
+  /// share one instance safely.
+  static final Map<ControlPointPreset, BhpMesh> _meshGeoCache =
+      <ControlPointPreset, BhpMesh>{};
+  static const int _kMeshGeoCap = 8;
+
+  BhpMesh _meshFor(ControlPointPreset preset, int subs) {
+    final BhpMesh? cached = _meshGeoCache[preset];
+    if (cached != null) return cached;
+    final BhpMesh mesh = BhpMesh.fromPreset(preset, subs);
+    if (_meshGeoCache.length >= _kMeshGeoCap) {
+      _meshGeoCache.remove(_meshGeoCache.keys.first);
+    }
+    _meshGeoCache[preset] = mesh;
+    return mesh;
+  }
+
   /// Picks a control-point preset (or, ~30% of the time, a denser generated grid),
   /// builds the bicubic mesh and pushes a new fading-in layer.
   void _pushLayer(ui.Image texture, String url) {
@@ -390,7 +413,7 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
     // [_kSubdivisions] (255÷4 = 63 ≥ 50); a 6×6 generated grid keeps the full 50
     // (255÷5 = 51), so generated grids no longer facet.
     final int subs = math.min(_kSubdivisions, 255 ~/ (preset.width - 1));
-    final BhpMesh mesh = BhpMesh.fromPreset(preset, subs);
+    final BhpMesh mesh = _meshFor(preset, subs);
     setState(() {
       _layers.add(MeshLayer(texture: texture, mesh: mesh));
     });
@@ -754,9 +777,18 @@ class _MeshGradientPainter extends CustomPainter {
     // opaque — i.e. not during a layer's fade-in, when the canvas is still
     // partly transparent and the palette wash below must show through (banding
     // is imperceptible during that ½s anyway).
+    // Strongest layer's eased alpha: drives how far the dim/dither ramp IN with
+    // the cross-fade, instead of a hard on/off gate at alpha>=0.99. The old
+    // `fieldOpaque` gate made the AMLL loudness-dim + dither snap on in a single
+    // frame at the end of each open — a visible 5–12% darken blink; ramping by
+    // fieldAlpha removes that pop.
+    double fieldAlpha = 0;
+    for (final MeshLayer l in layers) {
+      if (l.alpha > fieldAlpha) fieldAlpha = l.alpha;
+    }
+
     final ui.ImageShader? dither = ditherShader;
-    final bool fieldOpaque = layers.any((MeshLayer l) => l.alpha >= 0.99);
-    if (dither != null && fieldOpaque) {
+    if (dither != null && fieldAlpha >= 0.99) {
       canvas.drawRect(
         rect,
         Paint()
@@ -770,10 +802,11 @@ class _MeshGradientPainter extends CustomPainter {
     // over-paint. This replaces the old up-to-45% black Rect that flashed on every
     // bass hit (a luminance strobe that read as flicker and hid the motion). At the
     // peak vol (~0.35) brightness ≈ 0.83 → ~17% dim; at rest (0.1) ≈ 0.95 → ~5%.
-    // modulate·transparent stays transparent so the palette wash below is untouched;
-    // gated to an opaque field so a cross-fade never shows it.
-    if (brightness < 0.999 && fieldOpaque) {
-      final int c = (brightness * 255).round().clamp(0, 255);
+    // modulate·transparent stays transparent so the palette wash below is untouched.
+    // Scaled by [fieldAlpha] so the dim fades IN with the field (no end-of-open pop).
+    final double dimmed = 1.0 - (1.0 - brightness) * fieldAlpha;
+    if (dimmed < 0.999) {
+      final int c = (dimmed * 255).round().clamp(0, 255);
       canvas.drawRect(
         rect,
         Paint()
@@ -799,15 +832,28 @@ class _PaletteWash extends StatelessWidget {
 
   final List<Color> colors;
 
+  /// Compresses a raw palette swatch into the mesh field's tonal range. The field
+  /// is inherently DARK (album texture graded `brightness .75` × vignette × AMLL
+  /// loudness dim), while raw swatches keep the cover's native lightness. For a
+  /// bright cover (beige/white art) the un-toned wash was a near-white blast the
+  /// player push-fade dragged across the dark shell for a few frames (闪屏) before
+  /// the mesh covered it. Halving lightness + capping at 0.30 keeps the wash
+  /// hue-true but guarantees it can never be brighter than the field replacing it.
+  static Color _fieldTone(Color c) {
+    final HSLColor h = HSLColor.fromColor(c);
+    return h.withLightness((h.lightness * 0.5).clamp(0.05, 0.30)).toColor();
+  }
+
   @override
   Widget build(BuildContext context) {
     // A soft, tonally-coherent vertical ramp derived from the dominant swatch,
     // not two unrelated colours meeting in the middle — so the wash shown for
     // the ~½s before the mesh fades in already reads like the smooth field that
-    // replaces it.
-    final Color base = colors.isNotEmpty ? colors[0] : AppColors.seed;
+    // replaces it (same hue, same DARK tonal range — see [_fieldTone]).
+    final Color base =
+        _fieldTone(colors.isNotEmpty ? colors[0] : AppColors.seed);
     final Color second =
-        colors.length > 1 ? colors[1] : shiftLightness(base, -0.16);
+        colors.length > 1 ? _fieldTone(colors[1]) : shiftLightness(base, -0.16);
     return DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(

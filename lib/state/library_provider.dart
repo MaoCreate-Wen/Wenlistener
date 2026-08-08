@@ -173,6 +173,30 @@ class LibraryProvider extends ChangeNotifier {
     }
   }
 
+  // Albums keep a SEPARATE cache from playlists: an albumid and a listid can
+  // collide numerically, and `/album/:id` vs `/playlist/:id` are distinct routes.
+  final Map<int, Playlist> _albums = <int, Playlist>{};
+
+  Playlist? album(int id) => _albums[id];
+
+  /// Album detail incl. tracks (route `/album/:id`), keyed by albumid — a separate
+  /// id space from playlists. Only qqcn / kugougn resolve real tracks; other
+  /// backends return an empty album. Shares the [_loadingPlaylists] busy flag.
+  Future<Playlist> loadAlbum(int id) async {
+    final Playlist? cached = _albums[id];
+    if (cached != null) return cached;
+    _loadingPlaylists.add(id);
+    notifyListeners();
+    try {
+      final Playlist a = await api.albumDetail(id);
+      _albums[id] = a;
+      return a;
+    } finally {
+      _loadingPlaylists.remove(id);
+      notifyListeners();
+    }
+  }
+
   // --- playlist mutations (NetEase only) -----------------------------------
 
   /// Adds [song] to the playlist [playlistId].

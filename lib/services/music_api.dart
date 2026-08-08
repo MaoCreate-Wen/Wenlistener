@@ -32,6 +32,11 @@ abstract interface class MusicApi {
   /// Full playlist detail incl. tracks (Netease only; Migu throws).
   Future<Playlist> playlistDetail(int id);
 
+  /// Album detail incl. tracks, by albumid (a SEPARATE id space from playlists —
+  /// an albumid and a listid can collide numerically). Backends without album
+  /// support return an empty [Playlist] (never throw). Real for qqcn / kugougn.
+  Future<Playlist> albumDetail(int id);
+
   /// Logged-in user's own/created/subscribed playlists (NetEase only;
   /// Migu → empty).
   Future<List<Playlist>> userPlaylists({int limit, int offset});

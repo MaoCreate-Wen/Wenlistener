@@ -952,6 +952,10 @@ class QqApi implements MusicApi {
   /// up to 300 tracks in one call. Reachable via the router's per-source dispatch
   /// (`playlistDetailFrom`) so a local "共同歌单" forked from a QQ list can re-sync.
   @override
+  Future<Playlist> albumDetail(int id) async =>
+      Playlist(id: id, name: '专辑', tracks: const <Song>[]);
+
+  @override
   Future<Playlist> playlistDetail(int id) async {
     final Map<String, dynamic> payload = <String, dynamic>{
       'comm': _comm(),
