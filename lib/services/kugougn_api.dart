@@ -88,6 +88,13 @@ class KugougnApi implements MusicApi {
   String get _headerUserId =>
       (_account?.isValid ?? false) ? _account!.userId : '0';
 
+  /// `vip_status` for signed search/feed requests — '1' when the active account
+  /// is VIP, else '0' (mirrors the reference `DeviceCreds.VIP_STATUS`, derived in
+  /// `apply_login_data` from vip_type/svip_level). 概念版's mixed search gates the
+  /// per-row VIP-song privilege on this flag; hardcoding '0' made every VIP track
+  /// come back locked for a logged-in VIP user — the "sign for VIP" bug.
+  String get _vipStatus => (_account?.isVip ?? false) ? '1' : '0';
+
   KugougnApi({Dio? dio}) : _dio = dio ?? _buildDio();
 
   /// Builds the HTTP client with **autoUncompress disabled**. Like the reference
@@ -286,7 +293,7 @@ class KugougnApi implements MusicApi {
       'osversion': KugougnCrypto.osVersion,
       'userid': _userid,
       'ability': '1',
-      'vip_status': '0',
+      'vip_status': _vipStatus,
       'token': _token,
       'user_labels': '',
       'page_id': KugougnCrypto.pageId,
@@ -1082,24 +1089,37 @@ class KugougnApi implements MusicApi {
     final List<String> skipped = <String>[];
     final List<String> errors = <String>[];
 
-    // 1. 听歌免费 VIP (listen_song_task)
+    // 1. 听歌免费 VIP (listen_song_task) —— 面向所有账号的每日 VIP 主入口
+    // (REVERSE_ENGINEERING_REPORT §11.2：非VIP账号直接 receive_vip_listen_song →
+    //  status=1 即解锁，且「服务端根据 token 查询真实 VIP 状态」——即 App 端的
+    //  active_send 只是提示位，不同账号口径不一致。旧逻辑把它当硬门控 →
+    //  active_send 为假的账号整段被跳过、从不发起领取，这就是「一个账号能领、
+    //  另一个领不到」的根因。改为：只要 free_mode 返回了听歌任务(或 auto_send)
+    //  就发起领取，由服务端裁决；被服务端拒绝(今日已领/未达听歌时长/不符资格)
+    //  归为「跳过 + 服务端原因」，而非报错。
     try {
       final Map<String, String> infoParams = _signBase()
         ..['fields'] = 'auto_send,listen_song_task,upgrade_ad';
       final Map<String, dynamic> data = _obj((await _signedGet(
               _freeModeInfoUrl, infoParams, 'MineMainFreeMode-wifi'))['data']);
+      debugPrint('KugougnApi.signInDaily free_mode/info data=${jsonEncode(data)}');
       final Map<String, dynamic> listen = _obj(data['listen_song_task']);
-      if (_truthy(listen['active_send'])) {
+      final bool hasListenTask =
+          listen.isNotEmpty || _truthy(data['auto_send']);
+      if (hasListenTask) {
         final Map<String, dynamic> r = await _signedPost(
             _receiveListenSongUrl,
             _signBase(),
             const <String, dynamic>{},
             'ReceiveVipListenSong-wifi');
+        debugPrint(
+            'KugougnApi.signInDaily receive_vip_listen_song resp=${jsonEncode(r)}');
         if (_int(r['status']) == 1) {
           final String txt = _str(listen['vip_txt']);
           claimed.add(txt.isEmpty ? '听歌VIP' : '听歌VIP（$txt）');
         } else {
-          errors.add('听歌VIP：${_loginErrorText(r, '领取失败')}');
+          // 服务端说不能领 —— 已领/时长不够/不符资格：跳过并回显原因，不算失败。
+          skipped.add('听歌VIP（${_loginErrorText(r, '暂不可领')}）');
         }
       } else {
         skipped.add('听歌VIP（今日不可领）');
@@ -1113,6 +1133,7 @@ class KugougnApi implements MusicApi {
     try {
       final Map<String, dynamic> sd = _obj((await _signedGet(
               _secondFloorUrl, _signBase(), 'ChannelFreeMode-wifi'))['data']);
+      debugPrint('KugougnApi.signInDaily secondfloor_info data=${jsonEncode(sd)}');
 
       // 2a. 签到列表 (vip_signin.signin_list) — 领取第一个 receive_status==3 的
       final Map<String, dynamic> vipSignin = _obj(sd['vip_signin']);
