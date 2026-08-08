@@ -3,12 +3,12 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 
 import '../models/image_url.dart';
+import '../services/resource_cache.dart' show DiskCachedImage;
 import '../theme/app_colors.dart';
 import 'mesh_gradient/album_texture.dart';
 import 'mesh_gradient/bhp_mesh.dart';
@@ -435,7 +435,7 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
       // gives the low-quality downscale ample headroom; the 32² result is
       // visually identical.
       final ImageProvider provider = ResizeImage(
-        CachedNetworkImageProvider(url, headers: kNeteaseImageHeaders),
+        DiskCachedImage(url, headers: kNeteaseImageHeaders),
         width: 64,
         height: 64,
         allowUpscaling: false,

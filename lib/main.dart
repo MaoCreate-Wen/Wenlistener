@@ -194,6 +194,7 @@ Future<void> main() async {
     source: settingsData.source,
     rhythmEnabled: settingsData.rhythmEnabled,
     audioQuality: settingsData.audioQuality,
+    cacheMaxBytes: settingsData.cacheMaxBytes,
   );
 
   await audio.init();

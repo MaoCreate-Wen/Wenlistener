@@ -114,6 +114,23 @@ class SettingsPage extends StatelessWidget {
                 activeThumbColor: AppColors.accentPlay,
               ),
             ),
+
+            const SizedBox(height: AppDimens.space32),
+            const _SectionLabel('缓存'),
+            const SizedBox(height: AppDimens.space12),
+            _CacheLimitSelector(
+              bytes: settings.cacheMaxBytes,
+              choices: settings.cacheChoices,
+              labelOf: settings.cacheLabel,
+              onChanged: settings.setCacheMaxBytes,
+            ),
+            const SizedBox(height: AppDimens.space8),
+            Text(
+              '封面与歌词的离线缓存，超过上限时按最久未使用自动清理（不缓存音频流）。',
+              style: AppTypography.caption,
+            ),
+            const SizedBox(height: AppDimens.space12),
+            const _CacheUsageRow(),
           ],
         ),
       ),
@@ -309,6 +326,160 @@ class _QualitySelector extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Segmented disk-cache budget selector (256 MB / 512 MB / 1 GB / 2 GB) — same
+/// pill visual as [_QualitySelector]. Choices + labels come from
+/// [SettingsProvider] (the page never imports services/), writes go through
+/// [SettingsProvider.setCacheMaxBytes] (persisted + pushed into the live cache).
+class _CacheLimitSelector extends StatelessWidget {
+  final int bytes;
+  final List<int> choices;
+  final String Function(int) labelOf;
+  final ValueChanged<int> onChanged;
+
+  const _CacheLimitSelector({
+    required this.bytes,
+    required this.choices,
+    required this.labelOf,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceGlass,
+        borderRadius: BorderRadius.circular(AppDimens.radiusPill),
+        border: Border.all(color: AppColors.onSurface.withValues(alpha: 0.06)),
+      ),
+      child: Row(
+        children: <Widget>[
+          for (final int choice in choices) _seg(labelOf(choice), choice),
+        ],
+      ),
+    );
+  }
+
+  Widget _seg(String label, int value) {
+    final bool active = bytes == value;
+    return Expanded(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => onChanged(value),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active
+                ? AppColors.onSurface.withValues(alpha: 0.16)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(AppDimens.radiusPill),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+              color: active ? AppColors.onSurface : AppColors.onSurfaceMuted,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 已用空间 readout (computed on open / after clearing) + 清空缓存 button. Both
+/// the usage walk and the clear go through [SettingsProvider].
+class _CacheUsageRow extends StatefulWidget {
+  const _CacheUsageRow();
+
+  @override
+  State<_CacheUsageRow> createState() => _CacheUsageRowState();
+}
+
+class _CacheUsageRowState extends State<_CacheUsageRow> {
+  Future<int>? _usage;
+  bool _clearing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _usage = context.read<SettingsProvider>().cacheUsageBytes();
+  }
+
+  Future<void> _clear() async {
+    if (_clearing) return;
+    setState(() => _clearing = true);
+    final SettingsProvider settings = context.read<SettingsProvider>();
+    await settings.clearCache();
+    if (!mounted) return;
+    setState(() {
+      _clearing = false;
+      _usage = settings.cacheUsageBytes();
+    });
+  }
+
+  static String _fmt(int bytes) {
+    if (bytes >= (1 << 30)) {
+      return '${(bytes / (1 << 30)).toStringAsFixed(2)} GB';
+    }
+    if (bytes >= (1 << 20)) {
+      return '${(bytes / (1 << 20)).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / (1 << 10)).toStringAsFixed(0)} KB';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassContainer(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppDimens.space16,
+        vertical: AppDimens.space12,
+      ),
+      child: Row(
+        children: <Widget>[
+          const Icon(Icons.cleaning_services_rounded,
+              color: AppColors.onSurface, size: 20),
+          const SizedBox(width: AppDimens.space12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text('已用空间',
+                    style:
+                        AppTypography.body.copyWith(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 2),
+                FutureBuilder<int>(
+                  future: _usage,
+                  builder: (BuildContext context, AsyncSnapshot<int> snap) =>
+                      Text(
+                    snap.hasData ? _fmt(snap.data!) : '计算中…',
+                    style: AppTypography.caption
+                        .copyWith(color: AppColors.onSurfaceMuted),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: _clearing ? null : _clear,
+            child: _clearing
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Text('清空缓存'),
+          ),
+        ],
       ),
     );
   }

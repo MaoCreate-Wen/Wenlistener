@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/play_url.dart';
 import '../models/song.dart';
+import 'resource_cache.dart' show kCacheMaxBytesDefault;
 
 /// The persisted user settings snapshot.
 class SettingsData {
@@ -18,16 +19,22 @@ class SettingsData {
   /// Preferred playback audio quality. Default 极高 ([AudioLevel.exhigh]).
   final AudioLevel audioQuality;
 
+  /// Disk-cache budget for covers/lyrics (`ResourceCache`), in bytes.
+  /// Default 512 MB ([kCacheMaxBytesDefault]).
+  final int cacheMaxBytes;
+
   const SettingsData({
     required this.source,
     required this.rhythmEnabled,
     this.audioQuality = AudioLevel.exhigh,
+    this.cacheMaxBytes = kCacheMaxBytesDefault,
   });
 
   static const SettingsData defaults = SettingsData(
     source: MusicSource.netease,
     rhythmEnabled: true,
     audioQuality: AudioLevel.exhigh,
+    cacheMaxBytes: kCacheMaxBytesDefault,
   );
 }
 
@@ -74,8 +81,17 @@ class SettingsStore {
           break;
         }
       }
+      // Raw byte count; any positive int is accepted (choices may grow), else
+      // the 512 MB default.
+      final int cacheMax =
+          (m['cacheMaxBytes'] is int && (m['cacheMaxBytes'] as int) > 0)
+              ? m['cacheMaxBytes'] as int
+              : SettingsData.defaults.cacheMaxBytes;
       return SettingsData(
-          source: source, rhythmEnabled: rhythm, audioQuality: quality);
+          source: source,
+          rhythmEnabled: rhythm,
+          audioQuality: quality,
+          cacheMaxBytes: cacheMax);
     } catch (e) {
       debugPrint('SettingsStore.load failed: $e');
       return SettingsData.defaults;
@@ -86,6 +102,7 @@ class SettingsStore {
     required MusicSource source,
     required bool rhythmEnabled,
     required AudioLevel audioQuality,
+    int cacheMaxBytes = kCacheMaxBytesDefault,
   }) async {
     try {
       final File file = await _file();
@@ -95,6 +112,7 @@ class SettingsStore {
           'source': source.name,
           'rhythmEnabled': rhythmEnabled,
           'audioQuality': audioQuality.name,
+          'cacheMaxBytes': cacheMaxBytes,
         }),
         flush: true,
       );

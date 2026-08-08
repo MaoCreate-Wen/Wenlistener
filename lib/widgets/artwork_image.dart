@@ -1,9 +1,9 @@
 import 'dart:ui' show lerpDouble;
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../models/image_url.dart';
+import '../services/resource_cache.dart' show DiskCachedImage;
 import '../theme/app_colors.dart';
 import '../theme/app_dimens.dart';
 import 'skeleton_box.dart';
@@ -15,7 +15,7 @@ import 'skeleton_box.dart';
 /// driven by [_shuttle], which morphs the corner radius and fades the [shadow]
 /// in/out so the cover never pops between endpoints. Both the static tree and
 /// the flight render through the same [_ArtworkHeroChild] (backed by a shared
-/// [CachedNetworkImageProvider]) so the hand-off is pixel-identical — no
+/// [DiskCachedImage]) so the hand-off is pixel-identical — no
 /// placeholder flash, no corner jump.
 class ArtworkImage extends StatelessWidget {
   final String? url;
@@ -45,7 +45,7 @@ class ArtworkImage extends StatelessWidget {
     // Hero covers (mini-player ↔ player ↔ lyrics share the `album_art` tag) are
     // deliberately LEFT at full resolution: their seamless, pixel-identical
     // flight relies on all three endpoints resolving the *same*
-    // CachedNetworkImageProvider key, which a per-size ResizeImage would break
+    // DiskCachedImage key, which a per-size ResizeImage would break
     // (re-decode + skeleton flash mid-flight). One full-res decode for the
     // current song, shared across the trio, is not a peak driver.
     final int? decodeSize = heroTag == null
@@ -162,7 +162,7 @@ class _ArtworkHeroChild extends StatelessWidget {
     final bool hasUrl = url != null && url!.isNotEmpty;
     ImageProvider? provider;
     if (hasUrl) {
-      provider = CachedNetworkImageProvider(url!, headers: kNeteaseImageHeaders);
+      provider = DiskCachedImage(url!, headers: kNeteaseImageHeaders);
       if (decodeSize != null && decodeSize! > 0) {
         provider = ResizeImage(
           provider,

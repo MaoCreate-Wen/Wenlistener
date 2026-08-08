@@ -50,4 +50,18 @@ class DioFactory {
     dio.interceptors.add(WeapiInterceptor());
     return dio;
   }
+
+  /// Bare [Dio] for direct binary resource downloads (`ResourceCache`'s cover
+  /// fetches): no cookie jar, no weapi headers/base-url, strict 2xx, redirects
+  /// followed. Callers pass per-request headers (e.g. `kNeteaseImageHeaders`).
+  static Dio createPlain() => Dio(
+        BaseOptions(
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
+          responseType: ResponseType.bytes,
+          followRedirects: true,
+          validateStatus: (int? status) =>
+              status != null && status >= 200 && status < 300,
+        ),
+      );
 }

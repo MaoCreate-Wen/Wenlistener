@@ -4,7 +4,7 @@ description: "WenListener — an Apple Music-style player for Migu and NetEase C
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 
-version: 1.18.0+51
+version: 1.19.0+52
 
 environment:
   sdk: '>=3.4.0 <4.0.0'

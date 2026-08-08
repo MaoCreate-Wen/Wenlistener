@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:palette_generator/palette_generator.dart';
 
 import '../models/image_url.dart';
 import '../theme/app_colors.dart';
+import 'resource_cache.dart';
 
 /// Result of extracting a dynamic palette from album art.
 class PaletteResult {
@@ -68,7 +68,7 @@ class ArtworkPalette {
     try {
       // The image *decode* must run on the root isolate (`dart:ui`), so resolve
       // and rasterize the cover here, then hand the raw RGBA bytes off-thread.
-      // Decode at 100² via ResizeImage — CachedNetworkImageProvider ignores the
+      // Decode at 100² via ResizeImage — DiskCachedImage ignores the
       // ImageConfiguration size hint, so without this the cover is decoded at
       // full resolution (~4 MB RGBA) just to quantize. ResizeImage passes
       // cacheWidth/Height to the codec for a real downsample; the median-cut is
@@ -76,7 +76,7 @@ class ArtworkPalette {
       // fire on every song switch (including background auto-advance).
       final ui.Image image = await _resolveCoverImage(
         ResizeImage(
-          CachedNetworkImageProvider(url, headers: kNeteaseImageHeaders),
+          DiskCachedImage(url, headers: kNeteaseImageHeaders),
           width: 100,
           height: 100,
           allowUpscaling: false,
