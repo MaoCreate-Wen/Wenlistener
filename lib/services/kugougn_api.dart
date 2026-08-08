@@ -88,6 +88,13 @@ class KugougnApi implements MusicApi {
   String get _headerUserId =>
       (_account?.isValid ?? false) ? _account!.userId : '0';
 
+  /// `vip_status` for signed search/feed requests — '1' when the active account
+  /// is VIP, else '0' (mirrors the reference `DeviceCreds.VIP_STATUS`, derived in
+  /// `apply_login_data` from vip_type/svip_level). 概念版's mixed search gates the
+  /// per-row VIP-song privilege on this flag; hardcoding '0' made every VIP track
+  /// come back locked for a logged-in VIP user — the "sign for VIP" bug.
+  String get _vipStatus => (_account?.isVip ?? false) ? '1' : '0';
+
   KugougnApi({Dio? dio}) : _dio = dio ?? _buildDio();
 
   /// Builds the HTTP client with **autoUncompress disabled**. Like the reference
@@ -261,6 +268,46 @@ class KugougnApi implements MusicApi {
 
   // ===== search ============================================================
 
+  /// Dedicated album search (`mobilecdn/api/v3/search/album`, public, no sign) —
+  /// real `page`/`pagesize` paging, unlike the mixed 3-row preview. `data.info[]`
+  /// carries albumid/albumname/imgurl/singer.
+  Future<SearchResult> _searchAlbums(
+      String keyword, int limit, int offset) async {
+    final int pageSize = limit <= 0 ? 30 : limit;
+    final int page = (limit <= 0) ? 1 : (offset ~/ limit) + 1;
+    final Map<String, dynamic> resp = await _bareJson(
+      'http://mobilecdn.kugou.com/api/v3/search/album',
+      <String, String>{
+        'version': '9108',
+        'keyword': keyword,
+        'pagesize': pageSize.toString(),
+        'page': page.toString(),
+        'plat': '0',
+        'area_code': '1',
+        'iscorrection': '1',
+      },
+      log: page == 1,
+    );
+    final Map<String, dynamic> data = _obj(resp['data']);
+    final int total = _int(data['total']);
+    final dynamic rows = data['info'] ?? data['lists'] ?? data['list'];
+    final List<Album> albums = <Album>[];
+    final Set<int> seen = <int>{};
+    if (rows is List) {
+      for (final dynamic e in rows) {
+        if (e is! Map) continue;
+        final Album? a = _parseAlbum(Map<String, dynamic>.from(e));
+        if (a != null && a.id != 0 && seen.add(a.id)) albums.add(a);
+      }
+    }
+    return SearchResult(
+      type: SearchType.album,
+      albums: albums,
+      total: total > 0 ? total : albums.length,
+      hasMore: total > 0 ? (offset + albums.length) < total : false,
+    );
+  }
+
   @override
   Future<SearchResult> search({
     required String keyword,
@@ -271,6 +318,12 @@ class KugougnApi implements MusicApi {
     // kugougn mixed 无独立「歌手」分区（歌手只内嵌在 album 行里），歌词非搜索类型。
     if (type == SearchType.artist || type == SearchType.lyric) {
       return SearchResult.empty(type);
+    }
+    // 专辑走【专用】公开搜索端点：mixed 的 album 分区只有 3 条固定预览，cursor 只翻
+    // 歌曲不翻专辑（cursor>0 的 album 分区为空）。dedicated 端支持真正的
+    // page/pagesize 分页 → 数量正常 + loadMore 可续。
+    if (type == SearchType.album) {
+      return await _searchAlbums(keyword, limit, offset);
     }
     // The mixed search pages by an opaque `cursor`; page 1 == cursor 0.
     final int page = (limit <= 0) ? 1 : (offset ~/ limit) + 1;
@@ -286,7 +339,7 @@ class KugougnApi implements MusicApi {
       'osversion': KugougnCrypto.osVersion,
       'userid': _userid,
       'ability': '1',
-      'vip_status': '0',
+      'vip_status': _vipStatus,
       'token': _token,
       'user_labels': '',
       'page_id': KugougnCrypto.pageId,
@@ -307,14 +360,7 @@ class KugougnApi implements MusicApi {
 
       switch (type) {
         case SearchType.album:
-          final (List<dynamic> rows, int total) = _section(sections, 'album');
-          final List<Album> albums = _parseAlbums(rows);
-          return SearchResult(
-            type: type,
-            albums: albums,
-            total: total > 0 ? total : albums.length,
-            hasMore: false,
-          );
+          return SearchResult.empty(type); // handled above (dedicated endpoint)
         case SearchType.playlist:
           final (List<dynamic> rows, int total) = _section(sections, 'collect');
           final List<Playlist> playlists = _parsePlaylists(rows);
@@ -408,12 +454,11 @@ class KugougnApi implements MusicApi {
     final String name = _stripTags(
         _firstOf(raw, const <String>['albumname', 'AlbumName', 'title']));
     if (id == 0 && name.isEmpty) return null;
-    return Album(
-      id: id,
-      name: name,
-      picUrl: _httpsPic(_firstOf(
-          raw, const <String>['img', 'sizable_cover', 'cover', 'pic'])),
-    );
+    // dedicated 搜索行封面在 `imgurl`，常带 `{size}` 占位符；替换成实际尺寸。
+    final String cover = _firstOf(raw,
+            const <String>['img', 'imgurl', 'sizable_cover', 'cover', 'pic'])
+        .replaceAll('{size}', '240');
+    return Album(id: id, name: name, picUrl: _httpsPic(cover));
   }
 
   List<Playlist> _parsePlaylists(List<dynamic> rows) {
@@ -434,6 +479,14 @@ class KugougnApi implements MusicApi {
     final String name = _stripTags(
         _firstOf(raw, const <String>['specialname', 'SpecialName', 'title']));
     if (id == 0 && name.isEmpty) return null;
+    // 搜索来的公开歌单行带 `gid`(=global_collection_id) + `suid`(=原作者 userid)。
+    // 把它们按 specialid 存进 _kgnListRef，这样点开时 playlistDetail 能用【已验证】的
+    // get_other_list_file_nofilt 取曲目（专为「他人歌单」设计），绕开坏的 get_special_detail。
+    final String gid = _str(raw['gid'] ?? raw['global_collection_id']);
+    final int owner = _int(raw['suid'] ?? raw['list_create_userid']);
+    if (id != 0 && gid.isNotEmpty && gid != '0' && owner != 0) {
+      _kgnListRef[id] = (gcid: gid, ownerId: owner);
+    }
     return Playlist(
       id: id,
       name: name,
@@ -524,8 +577,10 @@ class KugougnApi implements MusicApi {
       );
     }
 
-    final int durSec = _int(_firstOf(
-        raw, const <String>['Duration', 'duration', 'TimeLength', 'timelen']));
+    final int durSec = _int(_firstOf(raw, const <String>[
+      'Duration', 'duration', 'TimeLength', 'timelen',
+      'time_length', 'timelength', // 每日推荐 everyday_song_recommend 用 time_length（秒）
+    ]));
 
     return Song(
       id: _stableId(hash, audioId),
@@ -1080,24 +1135,37 @@ class KugougnApi implements MusicApi {
     final List<String> skipped = <String>[];
     final List<String> errors = <String>[];
 
-    // 1. 听歌免费 VIP (listen_song_task)
+    // 1. 听歌免费 VIP (listen_song_task) —— 面向所有账号的每日 VIP 主入口
+    // (REVERSE_ENGINEERING_REPORT §11.2：非VIP账号直接 receive_vip_listen_song →
+    //  status=1 即解锁，且「服务端根据 token 查询真实 VIP 状态」——即 App 端的
+    //  active_send 只是提示位，不同账号口径不一致。旧逻辑把它当硬门控 →
+    //  active_send 为假的账号整段被跳过、从不发起领取，这就是「一个账号能领、
+    //  另一个领不到」的根因。改为：只要 free_mode 返回了听歌任务(或 auto_send)
+    //  就发起领取，由服务端裁决；被服务端拒绝(今日已领/未达听歌时长/不符资格)
+    //  归为「跳过 + 服务端原因」，而非报错。
     try {
       final Map<String, String> infoParams = _signBase()
         ..['fields'] = 'auto_send,listen_song_task,upgrade_ad';
       final Map<String, dynamic> data = _obj((await _signedGet(
               _freeModeInfoUrl, infoParams, 'MineMainFreeMode-wifi'))['data']);
+      debugPrint('KugougnApi.signInDaily free_mode/info data=${jsonEncode(data)}');
       final Map<String, dynamic> listen = _obj(data['listen_song_task']);
-      if (_truthy(listen['active_send'])) {
+      final bool hasListenTask =
+          listen.isNotEmpty || _truthy(data['auto_send']);
+      if (hasListenTask) {
         final Map<String, dynamic> r = await _signedPost(
             _receiveListenSongUrl,
             _signBase(),
             const <String, dynamic>{},
             'ReceiveVipListenSong-wifi');
+        debugPrint(
+            'KugougnApi.signInDaily receive_vip_listen_song resp=${jsonEncode(r)}');
         if (_int(r['status']) == 1) {
           final String txt = _str(listen['vip_txt']);
           claimed.add(txt.isEmpty ? '听歌VIP' : '听歌VIP（$txt）');
         } else {
-          errors.add('听歌VIP：${_loginErrorText(r, '领取失败')}');
+          // 服务端说不能领 —— 已领/时长不够/不符资格：跳过并回显原因，不算失败。
+          skipped.add('听歌VIP（${_loginErrorText(r, '暂不可领')}）');
         }
       } else {
         skipped.add('听歌VIP（今日不可领）');
@@ -1111,6 +1179,7 @@ class KugougnApi implements MusicApi {
     try {
       final Map<String, dynamic> sd = _obj((await _signedGet(
               _secondFloorUrl, _signBase(), 'ChannelFreeMode-wifi'))['data']);
+      debugPrint('KugougnApi.signInDaily secondfloor_info data=${jsonEncode(sd)}');
 
       // 2a. 签到列表 (vip_signin.signin_list) — 领取第一个 receive_status==3 的
       final Map<String, dynamic> vipSignin = _obj(sd['vip_signin']);
@@ -1225,13 +1294,15 @@ class KugougnApi implements MusicApi {
     final String bodyText = jsonEncode(<String, dynamic>{
       'appid': 1100,
       'clientver': int.parse(KugougnCrypto.clientVer),
-      'platform': 'ANDROID',
+      'platform': 'android',
       'clienttime': ctsMs,
       'key': key,
       'area_code': '1',
       'birthday': '',
       'vip_flags': 0,
       'm_type': 0,
+      // 见下方 platform：小写 'android'（App DKEngine.DKPlatform.ANDROID 常量值）。
+      // 大写 'ANDROID' → everydayrec 后端 error_code 200103 空返回（实网复测确认）。
       'vip_type': _account?.vipType ?? 0,
       'mid': KugougnCrypto.mid,
       'uuid': '-',
@@ -1268,21 +1339,8 @@ class KugougnApi implements MusicApi {
           if (s != null && seen.add(s.id)) songs.add(s);
         }
       }
-      // DEBUG kgn daily — remove after diagnosis.
-      if (songs.isEmpty) {
-        debugPrint('KGN daily EMPTY: status=${resp['status'] ?? resp['error_code']} '
-            'errcode=${resp['errcode']} keys=${resp.keys.toList()} '
-            'body=${jsonEncode(resp).substring(0, jsonEncode(resp).length.clamp(0, 300))}');
-      }
       return songs.take(limit).toList();
-    } on DioException catch (e) {
-      // DEBUG kgn daily — remove after diagnosis.
-      final dynamic rd = e.response?.data;
-      final String body = rd is List<int>
-          ? utf8.decode(_inflateBytes(Uint8List.fromList(rd)), allowMalformed: true)
-          : _str(rd);
-      debugPrint('KGN daily DioErr: status=${e.response?.statusCode} '
-          'body=${body.replaceAll("\n", " ").substring(0, body.length.clamp(0, 300))}');
+    } on DioException {
       return const <Song>[];
     } catch (e) {
       debugPrint('KugougnApi._dailySongs failed: $e');
@@ -1305,9 +1363,19 @@ class KugougnApi implements MusicApi {
       ref = _kgnListRef[id];
     }
     if (ref == null) {
-      debugPrint('KGN playlistDetail($id): no global_collection_id '
-          '(private/local list) — empty playlist.');
-      return Playlist(id: id, name: '酷狗歌单', tracks: const <Song>[]);
+      // Not a known cloud 歌单 → almost always a SEARCHED ALBUM opened through the
+      // shared /playlist route (albums carry an albumid, never a listid, so they
+      // never land in _kgnListRef). Fetch the album's tracks via get_special_detail
+      // in album mode. Falls back to an empty list if that isn't an album either.
+      final Playlist? album = await _albumDetail(id);
+      if (album != null && album.tracks.isNotEmpty) return album;
+      debugPrint('KGN playlistDetail($id): not a cloud 歌单 nor a non-empty '
+          'album — empty.');
+      return Playlist(
+        id: id,
+        name: (album != null && album.name.isNotEmpty) ? album.name : '酷狗',
+        tracks: const <Song>[],
+      );
     }
     try {
       final Map<String, String> p = _signBase()
@@ -1362,6 +1430,84 @@ class KugougnApi implements MusicApi {
       return Playlist(id: id, name: '酷狗歌单', tracks: const <Song>[]);
     }
   }
+
+  /// 专辑详情(搜索专辑打开走这里，复用 /playlist 路由)。概念版 gateway 的
+  /// `get_special_detail`(type=1/billtype=1) 实测返回 HTTP 400（文档端点是坏的）→
+  /// 专辑页空白，这就是「搜索专辑后打不开」的根因。改走经典公开端点
+  /// `mobilecdn.kugou.com/api/v3/album/song`（无需签名/登录、全客户端共用，需用
+  /// 不带 KG-* 概念头的裸请求 [_bareJson]），返回 `data.info[]`（含
+  /// hash/album_audio_id/filename，[_parseSong] 直接可用）。传输/解析失败返回 null，
+  /// [playlistDetail] 兜底为空。
+  Future<Playlist?> _albumDetail(int id) async {
+    try {
+      final Map<String, dynamic> resp = await _bareJson(
+        'http://mobilecdn.kugou.com/api/v3/album/song',
+        <String, String>{
+          'version': '9108',
+          'albumid': id.toString(),
+          'plat': '0',
+          'pagesize': '100',
+          'area_code': '1',
+          'page': '1',
+        },
+      );
+      final Map<String, dynamic> data = _obj(resp['data']);
+      final Set<int> seen = <int>{};
+      final List<Song> tracks = <Song>[];
+      final dynamic rows =
+          data['info'] ?? data['songs'] ?? data['song_list'] ?? data['list'];
+      if (rows is List) {
+        for (final dynamic e in rows) {
+          if (e is! Map) continue;
+          final Song? s = _parseSong(Map<String, dynamic>.from(e));
+          if (s != null && seen.add(s.id)) tracks.add(s);
+        }
+      }
+      final String name = _stripTags(_str(
+          data['album_name'] ?? data['albumname'] ?? resp['album_name']));
+      return Playlist(
+        id: id,
+        name: name.isEmpty ? '专辑' : name,
+        trackCount: tracks.length,
+        tracks: tracks,
+      );
+    } catch (e) {
+      debugPrint('KGN albumDetail($id) failed: $e');
+      return null;
+    }
+  }
+
+  /// BARE GET (no KG-* headers, standard mobile UA) + JSON decode — for the
+  /// classic public `mobilecdn.kugou.com` endpoints, which return `{}` when hit
+  /// with the concept app's KG-* headers. Empty map on any failure.
+  Future<Map<String, dynamic>> _bareJson(String url, Map<String, String> q,
+      {bool log = false}) async {
+    final Dio bare = Dio(BaseOptions(
+      responseType: ResponseType.bytes,
+      headers: <String, String>{
+        'User-Agent':
+            'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Mobile',
+      },
+    ));
+    try {
+      final Response<dynamic> r =
+          await bare.get<dynamic>(url, queryParameters: q);
+      final Uint8List raw = _bytes(_bytesOf(r.data));
+      final String text = utf8.decode(raw, allowMalformed: true);
+      if (log) {
+        debugPrint('KGN bareGet $url raw[${text.length}]='
+            '${text.substring(0, text.length.clamp(0, 400))}');
+      }
+      final dynamic j = jsonDecode(text);
+      return j is Map ? Map<String, dynamic>.from(j) : <String, dynamic>{};
+    } catch (e) {
+      debugPrint('KGN bareGet $url failed: $e');
+      return <String, dynamic>{};
+    }
+  }
+
+  static List<int> _bytesOf(dynamic d) =>
+      d is List<int> ? d : (d is String ? utf8.encode(d) : const <int>[]);
 
   /// The signed-in user's cloud 歌单 (`cloudlist.service/v8/get_all_list`, login).
   @override
