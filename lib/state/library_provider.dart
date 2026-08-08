@@ -20,6 +20,14 @@ class LibraryProvider extends ChangeNotifier {
   bool _homeError = false;
   List<HomeSection> _homeSections = <HomeSection>[];
 
+  // The active source the home feed was last (re)loaded for. The home feed
+  // (每日推荐/推荐歌单/推荐歌曲) depends ONLY on the active source, so it must reload
+  // when the source changes — but NOT on the many other `router.refresh()` auth
+  // events (登录/登出/切账号/签到) that fire our listener without changing the source.
+  // Those used to re-fetch the identical 每日推荐 every time. Tracked here so
+  // [_onSourceChanged] can dedupe by source. `null` = never loaded.
+  MusicSource? _homeSource;
+
   final Map<int, Playlist> _playlists = <int, Playlist>{};
   final Set<int> _loadingPlaylists = <int>{};
 
@@ -51,8 +59,17 @@ class LibraryProvider extends ChangeNotifier {
   List<Playlist> get collectedPlaylists => _collected;
 
   void _onSourceChanged() {
-    _homeSections = <HomeSection>[];
-    loadHome();
+    // Reload the home feed ONLY when the active source actually changed, or when
+    // we still have no feed for it (e.g. a login just populated an account whose
+    // feed was empty). This is the fix for "很多无关的操作都会触发刷新": 签到, logging
+    // into / switching a NON-active source's account, and other `router.refresh()`
+    // callers fire this listener without changing the active source, and used to
+    // re-fetch the identical 每日推荐 each time. Now they leave the home feed alone.
+    // Explicit user reload (源切换 / 重试「还原」按钮) still calls [loadHome] directly.
+    if (api.source != _homeSource || (_homeSections.isEmpty && !_homeLoading)) {
+      _homeSections = <HomeSection>[];
+      loadHome();
+    }
     // 我的歌单 / 收藏 are a NETEASE-account feature routed to Netease regardless of
     // the active source (see MusicApiRouter) — reload them on EVERY refresh so
     // switching the playback source to 咪咕/酷狗 never hides the signed-in user's
@@ -63,6 +80,10 @@ class LibraryProvider extends ChangeNotifier {
   }
 
   Future<void> loadHome() async {
+    // Record the source this (re)load is for so [_onSourceChanged] dedupes any
+    // subsequent same-source refresh. Set eagerly (before the await) so a burst
+    // of startup refresh() events collapses to a single load.
+    _homeSource = api.source;
     _homeLoading = true;
     _homeError = false;
     notifyListeners();
