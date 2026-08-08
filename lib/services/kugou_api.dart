@@ -499,6 +499,11 @@ class KugouApi implements MusicApi {
     throw KugouApiException('Kugou has no playlist detail support');
   }
 
+  // 专辑详情仅 kugougn 落地；web 酷狗返回空(用空返回而非抛异常，避免搜索页误点崩)。
+  @override
+  Future<Playlist> albumDetail(int id) async =>
+      Playlist(id: id, name: '专辑', tracks: const <Song>[]);
+
   @override
   Future<List<Playlist>> userPlaylists({int limit = 30, int offset = 0}) async =>
       const <Playlist>[];

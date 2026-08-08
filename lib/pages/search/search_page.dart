@@ -398,7 +398,7 @@ class _SearchPageState extends State<SearchPage> {
             artUrl: a.picUrl,
             title: a.name,
             subtitle: '专辑',
-            onTap: () {},
+            onTap: () => context.push(Routes.albumPath(a.id)),
           ),
       ]);
 
@@ -409,7 +409,12 @@ class _SearchPageState extends State<SearchPage> {
             title: a.name,
             subtitle: '歌手',
             circle: true,
-            onTap: () {},
+            // 无独立歌手详情页 → 点歌手＝切到「单曲」搜该歌手名，列出其歌曲。
+            onTap: () {
+              _controller.text = a.name;
+              context.read<SearchProvider>().setType(SearchType.song);
+              _submit(a.name);
+            },
           ),
       ]);
 

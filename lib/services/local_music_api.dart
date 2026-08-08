@@ -85,6 +85,11 @@ class LocalMusicApi implements MusicApi {
   Future<Playlist> playlistDetail(int id) =>
       throw LocalMusicApiException('local music has no playlists');
 
+  // 本地源无专辑概念；返回空(不抛)。类是 const 构造，异步方法体不影响 const-ness。
+  @override
+  Future<Playlist> albumDetail(int id) async =>
+      Playlist(id: id, name: '专辑', tracks: const <Song>[]);
+
   @override
   Future<List<Playlist>> userPlaylists({int limit = 30, int offset = 0}) async =>
       const <Playlist>[];

@@ -2,7 +2,7 @@ name: wenlistener_desktop
 description: "WenListener Desktop — an independent PC (Windows) client for NetEase/QQ/Kugou/Kuwo, with its own desktop-native UI. Reuses the mobile app's logic layer (services/models/state/animation); the UI is built fresh for desktop."
 publish_to: 'none'
 
-version: 1.0.7+8
+version: 1.0.8+9
 
 environment:
   sdk: '>=3.4.0 <4.0.0'

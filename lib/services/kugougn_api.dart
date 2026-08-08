@@ -268,19 +268,11 @@ class KugougnApi implements MusicApi {
 
   // ===== search ============================================================
 
-  @override
-  Future<SearchResult> search({
-    required String keyword,
-    SearchType type = SearchType.song,
-    int limit = 30,
-    int offset = 0,
-  }) async {
-    // kugougn mixed 无独立「歌手」分区（歌手只内嵌在 album 行里），歌词非搜索类型。
-    if (type == SearchType.artist || type == SearchType.lyric) {
-      return SearchResult.empty(type);
-    }
-    // The mixed search pages by an opaque `cursor`; page 1 == cursor 0.
-    final int page = (limit <= 0) ? 1 : (offset ~/ limit) + 1;
+  /// One signed mixed-search request for [cursor]. Returns the typed `data.lists`
+  /// sections + the raw `data` map (`_section` slices a section out; `data` feeds
+  /// the song deep-walk fallback). Empty tuple on a non-Map body.
+  Future<(List<dynamic>, Map<String, dynamic>)> _mixedFetch(
+      String keyword, int cursor) async {
     final Map<String, String> p = _commonParams();
     p.addAll(<String, String>{
       'keyword': keyword,
@@ -288,7 +280,7 @@ class KugougnApi implements MusicApi {
       'tag': 'em',
       'area_code': '1',
       'iscorrection': '1',
-      'cursor': (page - 1).toString(),
+      'cursor': cursor.toString(),
       'apiver': '22',
       'osversion': KugougnCrypto.osVersion,
       'userid': _userid,
@@ -300,31 +292,113 @@ class KugougnApi implements MusicApi {
       'ppage_id': KugougnCrypto.ppageId,
     });
     p['signature'] = _c.sign(p);
+    final Map<String, dynamic> body = _json(await _get(_searchUrl, p));
+    final dynamic data = body['data'];
+    if (data is! Map) return (const <dynamic>[], <String, dynamic>{});
+    final Map<String, dynamic> d = Map<String, dynamic>.from(data);
+    final List<dynamic> sections =
+        (d['lists'] is List) ? d['lists'] as List<dynamic> : const <dynamic>[];
+    return (sections, d);
+  }
 
+  /// BARE GET (no KG-* headers, standard UA) + JSON decode — for the classic
+  /// public `mobilecdn.kugou.com` endpoints, which return `{}` when hit with the
+  /// concept app's KG-* headers. Empty map on any failure.
+  Future<Map<String, dynamic>> _bareJson(String url, Map<String, String> q,
+      {bool log = false}) async {
+    final Dio bare = Dio(BaseOptions(
+      responseType: ResponseType.bytes,
+      headers: <String, String>{
+        'User-Agent':
+            'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Mobile',
+      },
+    ));
     try {
-      final Map<String, dynamic> body = _json(await _get(_searchUrl, p));
-      final dynamic data = body['data'];
-      if (data is! Map) return SearchResult.empty(type);
-      final Map<String, dynamic> d = Map<String, dynamic>.from(data);
+      final Response<dynamic> r = await bare.get<dynamic>(url, queryParameters: q);
+      final Uint8List raw = _bytes(_bytesOf(r.data));
+      final String text = utf8.decode(raw, allowMalformed: true);
+      if (log) {
+        debugPrint('KGN bareGet $url raw[${text.length}]='
+            '${text.substring(0, text.length.clamp(0, 400))}');
+      }
+      final dynamic j = jsonDecode(text);
+      return j is Map ? Map<String, dynamic>.from(j) : <String, dynamic>{};
+    } catch (e) {
+      debugPrint('KGN bareGet $url failed: $e');
+      return <String, dynamic>{};
+    }
+  }
 
-      // `data.lists` is an array of typed SECTIONS ('song'|'album'|'collect'…),
-      // each with its own nested `lists[]` + `total` — NOT a flat song-row list.
-      final List<dynamic> sections =
-          (d['lists'] is List) ? d['lists'] as List<dynamic> : const <dynamic>[];
+  /// Dedicated album search (`mobilecdn/api/v3/search/album`, public, no sign) —
+  /// real `page`/`pagesize` paging, unlike the mixed 3-row preview. `data.info[]`
+  /// carries albumid/albumname/imgurl/singer.
+  Future<SearchResult> _searchAlbums(
+      String keyword, int limit, int offset) async {
+    final int pageSize = limit <= 0 ? 30 : limit;
+    final int page = (limit <= 0) ? 1 : (offset ~/ limit) + 1;
+    final Map<String, dynamic> resp = await _bareJson(
+      'http://mobilecdn.kugou.com/api/v3/search/album',
+      <String, String>{
+        'version': '9108',
+        'keyword': keyword,
+        'pagesize': pageSize.toString(),
+        'page': page.toString(),
+        'plat': '0',
+        'area_code': '1',
+        'iscorrection': '1',
+      },
+    );
+    final Map<String, dynamic> data = _obj(resp['data']);
+    final int total = _int(data['total']);
+    final dynamic rows = data['info'] ?? data['lists'] ?? data['list'];
+    final List<Album> albums = <Album>[];
+    final Set<int> seen = <int>{};
+    if (rows is List) {
+      for (final dynamic e in rows) {
+        if (e is! Map) continue;
+        final Album? a = _parseAlbum(Map<String, dynamic>.from(e));
+        if (a != null && a.id != 0 && seen.add(a.id)) albums.add(a);
+      }
+    }
+    return SearchResult(
+      type: SearchType.album,
+      albums: albums,
+      total: total > 0 ? total : albums.length,
+      hasMore: total > 0 ? (offset + albums.length) < total : false,
+    );
+  }
+
+  @override
+  Future<SearchResult> search({
+    required String keyword,
+    SearchType type = SearchType.song,
+    int limit = 30,
+    int offset = 0,
+  }) async {
+    // kugougn mixed 无独立「歌手」分区（歌手只内嵌在 album 行里），歌词非搜索类型。
+    if (type == SearchType.artist || type == SearchType.lyric) {
+      return SearchResult.empty(type);
+    }
+    try {
+      // 专辑走【专用】公开搜索端点：mixed 的 album 分区只有 3 条固定预览，cursor 只翻
+      // 歌曲不翻专辑（实测 cursor>0 的 album 分区为空）。dedicated 端支持真正的
+      // page/pagesize 分页 → 数量正常 + loadMore 可续。
+      if (type == SearchType.album) {
+        return await _searchAlbums(keyword, limit, offset);
+      }
+
+      final int cursor = (limit <= 0) ? 0 : (offset ~/ limit);
+      final (List<dynamic> sections, Map<String, dynamic> d) =
+          await _mixedFetch(keyword, cursor);
 
       switch (type) {
         case SearchType.album:
-          final (List<dynamic> rows, int total) = _section(sections, 'album');
-          final List<Album> albums = _parseAlbums(rows);
-          return SearchResult(
-            type: type,
-            albums: albums,
-            total: total > 0 ? total : albums.length,
-            hasMore: false,
-          );
+          return SearchResult.empty(type); // handled above (dedicated endpoint)
         case SearchType.playlist:
-          final (List<dynamic> rows, int total) = _section(sections, 'collect');
-          final List<Playlist> playlists = _parsePlaylists(rows);
+          // 歌单仍走 mixed 的 collect 分区（它带 gid+suid → playlistDetail 能用已验证
+          // 的 get_other_list_file_nofilt 取曲目；换端点会丢这两个键、详情又打不开）。
+          final (List<dynamic> rows0, int total) = _section(sections, 'collect');
+          final List<Playlist> playlists = _parsePlaylists(rows0);
           return SearchResult(
             type: type,
             playlists: playlists,
@@ -415,12 +489,11 @@ class KugougnApi implements MusicApi {
     final String name = _stripTags(
         _firstOf(raw, const <String>['albumname', 'AlbumName', 'title']));
     if (id == 0 && name.isEmpty) return null;
-    return Album(
-      id: id,
-      name: name,
-      picUrl: _httpsPic(_firstOf(
-          raw, const <String>['img', 'sizable_cover', 'cover', 'pic'])),
-    );
+    // dedicated 搜索行封面在 `imgurl`，常带 `{size}` 占位符；替换成实际尺寸。
+    final String cover = _firstOf(raw,
+            const <String>['img', 'imgurl', 'sizable_cover', 'cover', 'pic'])
+        .replaceAll('{size}', '240');
+    return Album(id: id, name: name, picUrl: _httpsPic(cover));
   }
 
   List<Playlist> _parsePlaylists(List<dynamic> rows) {
@@ -441,6 +514,14 @@ class KugougnApi implements MusicApi {
     final String name = _stripTags(
         _firstOf(raw, const <String>['specialname', 'SpecialName', 'title']));
     if (id == 0 && name.isEmpty) return null;
+    // 搜索来的公开歌单行带 `gid`(=global_collection_id) + `suid`(=原作者 userid)。
+    // 把它们按 specialid 存进 _kgnListRef，这样点开时 playlistDetail 能用【已验证】的
+    // get_other_list_file_nofilt 取曲目（专为「他人歌单」设计），绕开坏的 get_special_detail。
+    final String gid = _str(raw['gid'] ?? raw['global_collection_id']);
+    final int owner = _int(raw['suid'] ?? raw['list_create_userid']);
+    if (id != 0 && gid.isNotEmpty && gid != '0' && owner != 0) {
+      _kgnListRef[id] = (gcid: gid, ownerId: owner);
+    }
     return Playlist(
       id: id,
       name: name,
@@ -1317,8 +1398,12 @@ class KugougnApi implements MusicApi {
       ref = _kgnListRef[id];
     }
     if (ref == null) {
-      debugPrint('KGN playlistDetail($id): no global_collection_id '
-          '(private/local list) — empty playlist.');
+      // 既非本人云歌单、又没在搜索里拿到 gid/suid（如深链冷启动）——酷狗无公开 HTTP
+      // 取歌端点（get_special_detail 实测 400），优雅降级为空歌单。搜索→点开的正常
+      // 路径已由 [_parsePlaylist] 把 collect 行的 gid+suid 存进 _kgnListRef，走上面的
+      // 已验证 get_other_list_file_nofilt，不会落到这里。
+      debugPrint('KGN playlistDetail($id): no gcid/owner (deep-link cold start) '
+          '— empty playlist.');
       return Playlist(id: id, name: '酷狗歌单', tracks: const <Song>[]);
     }
     try {
@@ -1374,6 +1459,63 @@ class KugougnApi implements MusicApi {
       return Playlist(id: id, name: '酷狗歌单', tracks: const <Song>[]);
     }
   }
+
+  /// 专辑详情 —— 概念版 gateway 的 `get_special_detail` 实测 400（文档端点是坏的）。
+  /// 改走经典公开端点 `mobilecdn.kugou.com/api/v3/album/song`（无需签名/登录，全客户端
+  /// 共用），返回 `data.info[]`（含 hash/album_audio_id/filename，[_parseSong] 直接可用）。
+  @override
+  Future<Playlist> albumDetail(int id) async {
+    try {
+      final Map<String, dynamic> resp = await _bareJson(
+        'http://mobilecdn.kugou.com/api/v3/album/song',
+        <String, String>{
+          'version': '9108',
+          'albumid': id.toString(),
+          'plat': '0',
+          'pagesize': '100',
+          'area_code': '1',
+          'page': '1',
+        },
+      );
+      final Map<String, dynamic> data = _obj(resp['data']);
+      final Set<int> seen = <int>{};
+      final List<Song> tracks = <Song>[];
+      final dynamic rows =
+          data['info'] ?? data['songs'] ?? data['song_list'] ?? data['list'];
+      if (rows is List) {
+        for (final dynamic e in rows) {
+          if (e is! Map) continue;
+          final Song? s = _parseSong(Map<String, dynamic>.from(e));
+          if (s != null && seen.add(s.id)) tracks.add(s);
+        }
+      }
+      final String name = _stripTags(_str(
+          data['album_name'] ?? data['albumname'] ?? resp['album_name']));
+      // 专辑封面：先取响应顶层封面键，取不到回落第一首歌的封面（用户诉求）。
+      final String? albumCover = _pic(
+              data['imgurl'] ??
+                  data['img'] ??
+                  data['sizable_cover'] ??
+                  data['album_sizable_cover'] ??
+                  resp['imgurl'],
+              480) ??
+          (tracks.isNotEmpty ? tracks.first.artworkUrl : null);
+      return Playlist(
+        id: id,
+        name: name.isEmpty ? '专辑' : name,
+        coverUrl: albumCover,
+        trackCount: tracks.length,
+        tracks: tracks,
+      );
+    } catch (e) {
+      debugPrint('KGN albumDetail($id) failed: $e');
+      return Playlist(id: id, name: '专辑', tracks: const <Song>[]);
+    }
+  }
+
+  static List<int> _bytesOf(dynamic d) => d is List<int>
+      ? d
+      : (d is String ? utf8.encode(d) : const <int>[]);
 
   /// The signed-in user's cloud 歌单 (`cloudlist.service/v8/get_all_list`, login).
   @override

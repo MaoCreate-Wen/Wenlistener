@@ -153,11 +153,28 @@ class SearchProvider extends ChangeNotifier {
   }
 
   SearchResult _merge(SearchResult a, SearchResult b) {
-    final List<Song> songs = <Song>[...a.songs, ...b.songs];
-    final List<Album> albums = <Album>[...a.albums, ...b.albums];
+    // Cross-page DEDUPE by id: kugougn's mixed search returns overlapping preview
+    // rows across cursors, so a naive concat would surface duplicate cards. Keep
+    // first occurrence (LinkedHashSet-style via a seen set).
+    List<T> dedup<T>(List<T> x, List<T> y, int Function(T) idOf) {
+      final Set<int> seen = <int>{};
+      final List<T> out = <T>[];
+      for (final T e in <T>[...x, ...y]) {
+        if (seen.add(idOf(e))) out.add(e);
+      }
+      return out;
+    }
+
+    final List<Song> songs = dedup<Song>(a.songs, b.songs, (Song s) => s.id);
+    final List<Album> albums =
+        dedup<Album>(a.albums, b.albums, (Album x) => x.id);
+    // Artists carry no stable numeric id here — keep the simple concat.
     final List<Artist> artists = <Artist>[...a.artists, ...b.artists];
-    final List<Playlist> playlists = <Playlist>[...a.playlists, ...b.playlists];
+    final List<Playlist> playlists =
+        dedup<Playlist>(a.playlists, b.playlists, (Playlist p) => p.id);
     final int total = b.total != 0 ? b.total : a.total;
+    final int prevLoaded =
+        a.songs.length + a.albums.length + a.artists.length + a.playlists.length;
     final int loaded =
         songs.length + albums.length + artists.length + playlists.length;
     return SearchResult(
@@ -167,7 +184,10 @@ class SearchProvider extends ChangeNotifier {
       artists: artists,
       playlists: playlists,
       total: total,
-      hasMore: total > loaded,
+      // Termination guard: if a page adds nothing NEW after dedupe (loaded didn't
+      // grow), stop — else `total > loaded` stays true forever → infinite paging
+      // spinner. Only keep paging while this page actually contributed rows.
+      hasMore: total > loaded && loaded > prevLoaded,
     );
   }
 }

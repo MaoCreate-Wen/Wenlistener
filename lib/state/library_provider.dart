@@ -29,6 +29,9 @@ class LibraryProvider extends ChangeNotifier {
   MusicSource? _homeSource;
 
   final Map<int, Playlist> _playlists = <int, Playlist>{};
+  // Albums keep a SEPARATE cache from playlists: an albumid and a listid/special_id
+  // can collide numerically, and `/album/:id` vs `/playlist/:id` are distinct.
+  final Map<int, Playlist> _albums = <int, Playlist>{};
   final Set<int> _loadingPlaylists = <int>{};
 
   List<Playlist> _userPlaylists = const <Playlist>[];
@@ -188,6 +191,24 @@ class LibraryProvider extends ChangeNotifier {
       final Playlist pl = await api.playlistDetail(id);
       _playlists[id] = pl;
       return pl;
+    } finally {
+      _loadingPlaylists.remove(id);
+      notifyListeners();
+    }
+  }
+
+  /// Album detail incl. tracks (route `/album/:id`). Cached in [_albums], keyed by
+  /// albumid — a separate id space from playlists. Only kugougn resolves it for
+  /// real; other backends return an empty album.
+  Future<Playlist> loadAlbum(int id) async {
+    final Playlist? cached = _albums[id];
+    if (cached != null) return cached;
+    _loadingPlaylists.add(id);
+    notifyListeners();
+    try {
+      final Playlist a = await api.albumDetail(id);
+      _albums[id] = a;
+      return a;
     } finally {
       _loadingPlaylists.remove(id);
       notifyListeners();

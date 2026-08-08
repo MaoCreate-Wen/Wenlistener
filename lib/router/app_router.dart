@@ -154,6 +154,16 @@ class AppRouter {
         ),
       ),
       GoRoute(
+        path: Routes.album, // '/album/:id' — reuses PlaylistDetailPage(isAlbum:true)
+        name: Routes.nAlbum,
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (BuildContext context, GoRouterState state) =>
+            PlaylistDetailPage(
+          playlistId: int.tryParse(state.pathParameters['id'] ?? '') ?? 0,
+          isAlbum: true,
+        ),
+      ),
+      GoRoute(
         path: Routes.localPlaylist, // '/local/:id'
         name: Routes.nLocalPlaylist,
         parentNavigatorKey: rootNavigatorKey,

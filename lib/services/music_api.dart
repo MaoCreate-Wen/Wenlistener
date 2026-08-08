@@ -32,6 +32,12 @@ abstract interface class MusicApi {
   /// Full playlist detail incl. tracks (Netease only; Migu throws).
   Future<Playlist> playlistDetail(int id);
 
+  /// Full album detail incl. tracks. Only kugougn implements it for real
+  /// (via `get_special_detail(is_album=True)`); every other backend returns an
+  /// empty [Playlist] (never throws) so opening one of their album cards
+  /// degrades gracefully instead of erroring.
+  Future<Playlist> albumDetail(int id);
+
   /// Logged-in user's own/created/subscribed playlists (NetEase only;
   /// Migu → empty).
   Future<List<Playlist>> userPlaylists({int limit, int offset});

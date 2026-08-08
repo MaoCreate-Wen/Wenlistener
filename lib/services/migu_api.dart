@@ -339,6 +339,10 @@ class MiguApi implements MusicApi {
     throw MiguApiException('Migu has no playlist detail support');
   }
 
+  // 休眠源，但仍 implements MusicApi → 必须实现（否则编译失败）。
+  @override
+  Future<Playlist> albumDetail(int id) async => const Playlist(id: 0, name: '专辑');
+
   @override
   Future<List<Playlist>> userPlaylists({int limit = 30, int offset = 0}) async =>
       const <Playlist>[];

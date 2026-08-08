@@ -29,6 +29,10 @@ class Routes {
   /// resolves it (`LibraryProvider.loadPlaylist`).
   static const String playlist = '/playlist/:id';
 
+  /// Album detail. `:id` is the album's `albumid` — a DISTINCT id space from the
+  /// playlist route's `listid`/`special_id` (`LibraryProvider.loadAlbum`).
+  static const String album = '/album/:id';
+
   /// Local ("共同歌单") playlist detail. `:id` is an opaque `lp_…` STRING id, kept
   /// distinct from the backend [playlist] route above.
   static const String localPlaylist = '/local/:id';
@@ -39,6 +43,7 @@ class Routes {
 
   // --- path builders --------------------------------------------------------
   static String playlistPath(int id) => '/playlist/$id';
+  static String albumPath(int id) => '/album/$id';
   static String localPlaylistPath(String id) => '/local/$id';
   static String loginPath(String source) => '/login/$source';
 
@@ -51,6 +56,7 @@ class Routes {
   static const String nLyrics = 'lyrics';
   static const String nAccounts = 'accounts';
   static const String nPlaylist = 'playlist';
+  static const String nAlbum = 'album';
   static const String nLocalPlaylist = 'localPlaylist';
   static const String nLogin = 'login';
 

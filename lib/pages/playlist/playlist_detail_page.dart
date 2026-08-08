@@ -23,7 +23,15 @@ import 'desktop_kit.dart';
 /// [LibraryProvider.loadPlaylist]; the page never re-implements fetching.
 class PlaylistDetailPage extends StatefulWidget {
   final int playlistId;
-  const PlaylistDetailPage({super.key, required this.playlistId});
+
+  /// When true this same page renders an ALBUM (route `/album/:id`) — loads via
+  /// [LibraryProvider.loadAlbum], labels 专辑, and hides the 收藏 action.
+  final bool isAlbum;
+  const PlaylistDetailPage({
+    super.key,
+    required this.playlistId,
+    this.isAlbum = false,
+  });
 
   @override
   State<PlaylistDetailPage> createState() => _PlaylistDetailPageState();
@@ -35,8 +43,10 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   @override
   void initState() {
     super.initState();
-    _future =
-        context.read<LibraryProvider>().loadPlaylist(widget.playlistId);
+    final LibraryProvider lib = context.read<LibraryProvider>();
+    _future = widget.isAlbum
+        ? lib.loadAlbum(widget.playlistId)
+        : lib.loadPlaylist(widget.playlistId);
   }
 
   @override
@@ -68,7 +78,8 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
                         const Icon(Icons.error_outline_rounded,
                             color: AppColors.onFaint, size: 40),
                         const SizedBox(height: AppDimens.space12),
-                        Text('歌单加载失败', style: AppTypography.body),
+                        Text(widget.isAlbum ? '专辑加载失败' : '歌单加载失败',
+                            style: AppTypography.body),
                         if (snap.hasError) ...<Widget>[
                           const SizedBox(height: AppDimens.space4),
                           Text('${snap.error}', style: AppTypography.caption),
@@ -77,7 +88,8 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
                     ),
                   );
                 }
-                return _PlaylistBody(playlist: snap.data!);
+                return _PlaylistBody(
+                    playlist: snap.data!, isAlbum: widget.isAlbum);
               },
             ),
           ),
@@ -113,7 +125,8 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
 
 class _PlaylistBody extends StatelessWidget {
   final Playlist playlist;
-  const _PlaylistBody({required this.playlist});
+  final bool isAlbum;
+  const _PlaylistBody({required this.playlist, this.isAlbum = false});
 
   Future<void> _playAll(BuildContext context, {int index = 0}) async {
     if (playlist.tracks.isEmpty) {
@@ -165,6 +178,7 @@ class _PlaylistBody extends StatelessWidget {
       tracks: playlist.tracks,
       headerBuilder: (BuildContext ctx, Widget toolbar) => _Header(
         playlist: playlist,
+        isAlbum: isAlbum,
         toolbar: toolbar,
         onPlayAll: () => _playAll(context),
         onCollect: () => _collect(context),
@@ -175,7 +189,8 @@ class _PlaylistBody extends StatelessWidget {
       emptyPlaceholder: Padding(
         padding: const EdgeInsets.only(top: AppDimens.space48),
         child: Center(
-          child: Text('该歌单没有曲目', style: AppTypography.label),
+          child: Text(isAlbum ? '该专辑没有曲目' : '该歌单没有曲目',
+              style: AppTypography.label),
         ),
       ),
     );
@@ -184,6 +199,7 @@ class _PlaylistBody extends StatelessWidget {
 
 class _Header extends StatelessWidget {
   final Playlist playlist;
+  final bool isAlbum;
   final Widget toolbar;
   final VoidCallback onPlayAll;
   final VoidCallback onCollect;
@@ -195,21 +211,29 @@ class _Header extends StatelessWidget {
     required this.onPlayAll,
     required this.onCollect,
     required this.onImport,
+    this.isAlbum = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    // 封面兜底：歌单/专辑自身无封面时，用第一首歌的封面（专辑详情 + 歌单详情通吃）。
+    final String? cover =
+        (playlist.coverUrl != null && playlist.coverUrl!.isNotEmpty)
+            ? playlist.coverUrl
+            : (playlist.tracks.isNotEmpty
+                ? playlist.tracks.first.artworkUrl
+                : null);
     return SizedBox(
       height: 300,
       child: Stack(
         fit: StackFit.expand,
         children: <Widget>[
           // Blurred cover fill.
-          if (playlist.coverUrl != null)
+          if (cover != null)
             ImageFiltered(
               imageFilter: ui.ImageFilter.blur(sigmaX: 40, sigmaY: 40),
               child: DkArt(
-                url: playlist.coverUrl,
+                url: cover,
                 size: 900,
                 radius: 0,
               ),
@@ -238,7 +262,7 @@ class _Header extends StatelessWidget {
                   decoration: const BoxDecoration(
                     boxShadow: AppDimens.albumShadow,
                   ),
-                  child: DkArt(url: playlist.coverUrl, size: 200),
+                  child: DkArt(url: cover, size: 200),
                 ),
                 const SizedBox(width: AppDimens.space24),
                 Expanded(
@@ -246,7 +270,8 @@ class _Header extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.end,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Text('歌单', style: AppTypography.caption),
+                      Text(isAlbum ? '专辑' : '歌单',
+                          style: AppTypography.caption),
                       const SizedBox(height: AppDimens.space4),
                       Text(
                         playlist.name,
@@ -283,11 +308,13 @@ class _Header extends StatelessWidget {
                             label: '播放全部',
                             onPressed: onPlayAll,
                           ),
-                          DkSecondaryButton(
-                            icon: Icons.favorite_border_rounded,
-                            label: '收藏',
-                            onPressed: onCollect,
-                          ),
+                          // 专辑无「收藏」（kugougn collectPlaylist 对 albumid 无意义）。
+                          if (!isAlbum)
+                            DkSecondaryButton(
+                              icon: Icons.favorite_border_rounded,
+                              label: '收藏',
+                              onPressed: onCollect,
+                            ),
                           DkSecondaryButton(
                             icon: Icons.library_add_rounded,
                             label: '导入到共同歌单',

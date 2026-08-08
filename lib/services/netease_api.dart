@@ -411,6 +411,11 @@ class NeteaseApi implements MusicApi {
   @override
   Future<Playlist> playlistDetail(int id) => _fetchPlaylist(id, fetchAll: true);
 
+  // 专辑详情暂只在 kugougn 落地；网易返回空歌单（页面降级为「没有曲目」，不抛错）。
+  @override
+  Future<Playlist> albumDetail(int id) async =>
+      Playlist(id: id, name: '专辑', tracks: const <Song>[]);
+
   /// Fetches v6/playlist/detail and assembles the playlist. With [fetchAll] the
   /// FULL ordered `trackIds` list is realized: ids missing from the inline
   /// `tracks` are batch-fetched (500 per call, sequential, isolated per batch via

@@ -49,6 +49,11 @@ class QqcnApi implements MusicApi {
   /// prompt reappears. Never fired on an ambiguous/unknown result.
   void Function()? onSessionExpired;
 
+  /// albumid(int) → album_mid(String), populated by [_albumFromQqcnRow] during a
+  /// 专辑 search so [albumDetail] (int-keyed route) can call the mid-based
+  /// GetAlbumSongList. QQ 专辑详情只认字符串 mid。
+  final Map<int, String> _albumMidById = <int, String>{};
+
   QqcnApi({required QqcnCookieStore cookies, QqcnCrypto crypto = const QqcnCrypto()})
       : _cookies = cookies,
         _crypto = crypto,
@@ -228,52 +233,133 @@ class QqcnApi implements MusicApi {
     int limit = 30,
     int offset = 0,
   }) async {
-    // The Android `do_search_v2` returns songs (`item_song`). Album/artist/playlist
-    // text search isn't part of the verified Android surface, so those tabs return
-    // empty gracefully (the app's primary need is song search).
-    if (type != SearchType.song && type != SearchType.comprehensive) {
+    // do_search_v2 支持按 search_type 搜不同类型（jadx 实证：专辑=2、歌单=3、单曲/综合
+    // =100/0；歌手=1）；响应 body 是多块结构，每块 {items:[...]}。歌词本批不接。
+    if (type == SearchType.lyric) {
       return SearchResult.empty(type);
     }
     final int page = (limit <= 0) ? 1 : (offset ~/ limit) + 1;
-    const String key =
-        'music.adaptor.SearchAdaptorQMMobile.do_search_v2';
+    final int num = limit <= 0 ? 20 : limit;
     try {
-      final Map<String, dynamic> resp = await _callMusics(<Map<String, dynamic>>[
-        <String, dynamic>{
-          'module': 'music.adaptor.SearchAdaptorQMMobile',
-          'method': 'do_search_v2',
-          'param': <String, dynamic>{
-            'ver': 0,
-            'searchid': _searchId(),
-            'sub_searchid': 0,
-            'search_type': 100,
-            'query': keyword,
-            'page_id': page,
-            'page_num': page,
-            'num_per_page': limit <= 0 ? 20 : limit,
-            'remoteplace': 'search.android.search',
-          },
-        },
-      ]);
-      final dynamic entry = resp[key];
-      final dynamic bodyBlk = entry is Map ? (entry['data'] is Map
-          ? (entry['data'] as Map)['body']
-          : null) : null;
-      final dynamic itemSong = bodyBlk is Map ? bodyBlk['item_song'] : null;
-      final dynamic list = itemSong is Map ? itemSong['items'] : null;
-      if (list is! List) return SearchResult.empty(SearchType.song);
-      final List<Song> songs = list
-          .whereType<Map>()
-          .map((dynamic e) => _songFromQqcnRow(Map<String, dynamic>.from(e)))
-          .where((Song s) =>
-              s.name.isNotEmpty && (s.ref['mid']?.isNotEmpty ?? false))
-          .toList();
-      return SearchResult(
-        type: SearchType.song,
-        songs: songs,
-        total: songs.length,
-        hasMore: songs.length >= (limit <= 0 ? 20 : limit),
-      );
+      switch (type) {
+        case SearchType.album:
+          // 专用 web 专辑搜索（client_search_cp t=8）→ data.album.list 全量分页。
+          final Map<String, dynamic> resp = await _qqWebJson(
+            'https://c.y.qq.com/soso/fcgi-bin/client_search_cp',
+            <String, String>{
+              'format': 'json',
+              't': '8',
+              'n': num.toString(),
+              'p': page.toString(),
+              'w': keyword,
+              'cr': '1',
+              'g_tk': '5381',
+              'loginUin': '0',
+              'hostUin': '0',
+              'inCharset': 'utf8',
+              'outCharset': 'utf-8',
+              'notice': '0',
+              'platform': 'yqq.json',
+              'needNewCode': '0',
+              'aggr': '1',
+              'catZhida': '1',
+              'lossless': '0',
+              'flag_qc': '0',
+              'remoteplace': 'txt.mqq.all',
+            },
+          );
+          final Map<String, dynamic> aData =
+              resp['data'] is Map ? Map<String, dynamic>.from(resp['data']) : {};
+          final Map<String, dynamic> albObj = aData['album'] is Map
+              ? Map<String, dynamic>.from(aData['album'])
+              : {};
+          final int aTotal = _int(albObj['totalnum'] ?? albObj['sum']);
+          final dynamic aRows = albObj['list'];
+          final List<Album> albums = <Album>[];
+          if (aRows is List) {
+            for (final dynamic e in aRows) {
+              if (e is! Map) continue;
+              final Album a = _albumFromQqcnRow(Map<String, dynamic>.from(e));
+              if (a.name.isNotEmpty) albums.add(a);
+            }
+          }
+          return SearchResult(
+            type: type,
+            albums: albums,
+            total: aTotal > 0 ? aTotal : albums.length,
+            hasMore: aTotal > 0
+                ? (offset + albums.length) < aTotal
+                : albums.length >= num,
+          );
+        case SearchType.playlist:
+          // 专用 web 歌单搜索 → data.list 全量分页（page_no 从 0 起）。
+          final Map<String, dynamic> resp = await _qqWebJson(
+            'https://c.y.qq.com/soso/fcgi-bin/client_music_search_songlist',
+            <String, String>{
+              'remoteplace': 'txt.yqq.playlist',
+              'page_no': (page - 1).toString(),
+              'num_per_page': num.toString(),
+              'query': keyword,
+              'format': 'json',
+              'inCharset': 'utf8',
+              'outCharset': 'utf-8',
+              'g_tk': '5381',
+              'loginUin': '0',
+              'hostUin': '0',
+              'platform': 'yqq',
+              'needNewCode': '0',
+            },
+          );
+          final Map<String, dynamic> pData =
+              resp['data'] is Map ? Map<String, dynamic>.from(resp['data']) : {};
+          final int pTotal = _int(pData['sum'] ?? pData['total']);
+          final dynamic pRows = pData['list'];
+          final List<Playlist> playlists = <Playlist>[];
+          if (pRows is List) {
+            for (final dynamic e in pRows) {
+              if (e is! Map) continue;
+              final Playlist p =
+                  _playlistFromQqcnRow(Map<String, dynamic>.from(e));
+              if (p.name.isNotEmpty && p.id != 0) playlists.add(p);
+            }
+          }
+          return SearchResult(
+            type: type,
+            playlists: playlists,
+            total: pTotal > 0 ? pTotal : playlists.length,
+            hasMore: pTotal > 0
+                ? (offset + playlists.length) < pTotal
+                : playlists.length >= num,
+          );
+        case SearchType.artist:
+          final Map<String, dynamic> body =
+              await _doSearchBody(keyword, 1, page, num);
+          final List<Artist> artists =
+              _pickRows(body, <String>['singer', 'item_user'])
+                  .map((Map<String, dynamic> r) => _artistFromQqcnRow(r))
+                  .where((Artist a) => a.name.isNotEmpty)
+                  .toList();
+          return SearchResult(
+            type: type,
+            artists: artists,
+            total: artists.length,
+            hasMore: artists.length >= num,
+          );
+        default: // song / comprehensive
+          final Map<String, dynamic> body =
+              await _doSearchBody(keyword, 100, page, num);
+          final List<Song> songs = _rowsOf(body, 'item_song')
+              .map((Map<String, dynamic> e) => _songFromQqcnRow(e))
+              .where((Song s) =>
+                  s.name.isNotEmpty && (s.ref['mid']?.isNotEmpty ?? false))
+              .toList();
+          return SearchResult(
+            type: SearchType.song,
+            songs: songs,
+            total: songs.length,
+            hasMore: songs.length >= num,
+          );
+      }
     } on DioException catch (e) {
       throw QqcnApiException(e.message ?? 'QQ search failed');
     }
@@ -1119,10 +1205,14 @@ class QqcnApi implements MusicApi {
     try {
       data = await _getSession(
           accessToken: accessToken, openid: openid, qq: qq);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[qqcn] silent-refresh GetSession threw: $e — keep session');
       return null; // transport failure → unknown, keep session
     }
     final String authst = _str(data['authst']);
+    debugPrint('[qqcn] silent-refresh GetSession → '
+        'freshAuthst=${authst.isNotEmpty} uid=${_str(data['uid'] ?? data['uin'])} '
+        'sid=${_str(data['sid']).isNotEmpty}');
     if (authst.isNotEmpty) {
       // Silent refresh — persist the fresh authst(vkey)/sid/uid.
       await _cookies.saveSession(<String, dynamic>{
@@ -1242,6 +1332,63 @@ class QqcnApi implements MusicApi {
       return r.songs.take(limit).toList();
     } catch (_) {
       return const <Song>[];
+    }
+  }
+
+  /// 专辑详情：`GetAlbumSongList(albumMid)` → songList[].songInfo。album_mid 由
+  /// [_albumFromQqcnRow] 在搜索时按 int id 存下（QQ 专辑详情只认字符串 mid，而路由是
+  /// int）。搜过才有 mid；直链冷启动无 mid → 空。
+  @override
+  Future<Playlist> albumDetail(int id) async {
+    final String mid = _albumMidById[id] ?? '';
+    if (mid.isEmpty) {
+      debugPrint('[qqcn] albumDetail($id): no album_mid cached — empty.');
+      return Playlist(id: id, name: '专辑', tracks: const <Song>[]);
+    }
+    const String key = 'music.musichallAlbum.AlbumSongList.GetAlbumSongList';
+    try {
+      final Map<String, dynamic> resp = await _callMusics(<Map<String, dynamic>>[
+        <String, dynamic>{
+          'module': 'music.musichallAlbum.AlbumSongList',
+          'method': 'GetAlbumSongList',
+          'param': <String, dynamic>{
+            'albumMid': mid,
+            'begin': 0,
+            'num': 100,
+            'order': 2,
+          },
+        },
+      ]);
+      final Map<String, dynamic> data = _dataFor(resp, key);
+      final dynamic songList =
+          data['songList'] ?? data['songs'] ?? data['list'];
+      final List<Song> tracks = <Song>[];
+      if (songList is List) {
+        for (final dynamic e in songList) {
+          if (e is! Map) continue;
+          final Map<String, dynamic> m = Map<String, dynamic>.from(e);
+          // 每行常把歌曲包在 songInfo 下；否则就是扁平行。
+          final Map<String, dynamic> row = m['songInfo'] is Map
+              ? Map<String, dynamic>.from(m['songInfo'] as Map)
+              : m;
+          final Song s = _songFromQqcnRow(row);
+          if (s.name.isNotEmpty && (s.ref['mid']?.isNotEmpty ?? false)) {
+            tracks.add(s);
+          }
+        }
+      }
+      final String name = _str(data['albumName'] ?? data['name']);
+      return Playlist(
+        id: id,
+        name: name.isEmpty ? '专辑' : name,
+        coverUrl:
+            'https://y.gtimg.cn/music/photo_new/T002R800x800M000$mid.jpg',
+        trackCount: tracks.length,
+        tracks: tracks,
+      );
+    } catch (e) {
+      debugPrint('[qqcn] albumDetail($id) failed: $e');
+      return Playlist(id: id, name: '专辑', tracks: const <Song>[]);
     }
   }
 
@@ -1435,6 +1582,145 @@ class QqcnApi implements MusicApi {
 
   String _searchId() =>
       (DateTime.now().microsecondsSinceEpoch % 100000000000000000).toString();
+
+  /// One do_search_v2 request for [searchType] (jadx: 专辑=2, 歌单=3, 单曲/综合=100),
+  /// returning the multi-block `data.body` map ({} on miss). Each block is
+  /// `body['item_*']['items']`.
+  Future<Map<String, dynamic>> _doSearchBody(
+      String keyword, int searchType, int page, int num) async {
+    const String key = 'music.adaptor.SearchAdaptorQMMobile.do_search_v2';
+    final Map<String, dynamic> resp = await _callMusics(<Map<String, dynamic>>[
+      <String, dynamic>{
+        'module': 'music.adaptor.SearchAdaptorQMMobile',
+        'method': 'do_search_v2',
+        'param': <String, dynamic>{
+          'ver': 0,
+          'searchid': _searchId(),
+          'sub_searchid': 0,
+          'search_type': searchType,
+          'query': keyword,
+          'page_id': page,
+          'page_num': page,
+          'num_per_page': num,
+          'remoteplace': 'search.android.search',
+        },
+      },
+    ]);
+    final dynamic entry = resp[key];
+    final dynamic data = entry is Map ? entry['data'] : null;
+    final dynamic body = data is Map ? data['body'] : null;
+    return body is Map ? Map<String, dynamic>.from(body) : <String, dynamic>{};
+  }
+
+  /// Bare GET to a public QQ **web** search endpoint (`c.y.qq.com`, `format=json`,
+  /// no Android sign) → decoded JSON map. do_search_v2 only returns tiny per-type
+  /// previews (album≈3, 歌单≈5); the web `client_search_cp` / songlist endpoints
+  /// return the FULL paged list. Reuses [_decodeBody] for gzip/zlib/plain.
+  Future<Map<String, dynamic>> _qqWebJson(
+      String url, Map<String, String> q) async {
+    final Response<dynamic> r = await _dio.get<dynamic>(
+      url,
+      queryParameters: q,
+      options: Options(
+        responseType: ResponseType.bytes,
+        headers: <String, String>{
+          'Referer': 'https://y.qq.com/',
+          'User-Agent': _ptUa,
+        },
+      ),
+    );
+    try {
+      return _decodeBody(r.data);
+    } catch (e) {
+      debugPrint('[qqcn] webJson $url decode failed: $e');
+      return <String, dynamic>{};
+    }
+  }
+
+  /// Rows of a do_search_v2 body block. A block is either `{items:[...]}` or a
+  /// bare list. Empty on any miss.
+  List<Map<String, dynamic>> _rowsOf(Map<String, dynamic> body, String block) {
+    final dynamic blk = body[block];
+    final dynamic items =
+        blk is Map ? blk['items'] : (blk is List ? blk : null);
+    if (items is! List) return const <Map<String, dynamic>>[];
+    return items
+        .whereType<Map>()
+        .map((dynamic e) => Map<String, dynamic>.from(e))
+        .toList();
+  }
+
+  /// do_search_v2 returns the SAME mixed body for every search_type; `item_*`
+  /// blocks are 3–5 row previews, while `vertical_*` blocks hold the full paged
+  /// list for the requested type. Picks the fuller block among [keys] and logs
+  /// each candidate's row count (so the right key is verifiable at runtime).
+  List<Map<String, dynamic>> _pickRows(
+      Map<String, dynamic> body, List<String> keys) {
+    List<Map<String, dynamic>> best = const <Map<String, dynamic>>[];
+    for (final String k in keys) {
+      final List<Map<String, dynamic>> rows = _rowsOf(body, k);
+      if (rows.length > best.length) best = rows;
+    }
+    return best;
+  }
+
+  /// item_album row → [Album]. Cover falls back to the CDN template from the
+  /// album mid when no `pic` field is present.
+  Album _albumFromQqcnRow(Map<String, dynamic> row) {
+    final int id = _int(row['id'] ?? row['albumid'] ?? row['albumID']);
+    final String name =
+        _str(row['name'] ?? row['albumName'] ?? row['album_name']);
+    final String albummid = _str(
+        row['albummid'] ?? row['albumMID'] ?? row['album_mid'] ?? row['mid']);
+    // 专辑详情要用字符串 album_mid，而 /album/:id 路由与 loadAlbum 缓存都是 int →
+    // 按 int id 存下 mid（同 kugougn 存 gid/suid 的套路），albumDetail 据此取歌。
+    if (id != 0 && albummid.isNotEmpty) _albumMidById[id] = albummid;
+    String cover = _str(row['pic'] ?? row['albumPic'] ?? row['logo']);
+    if (cover.isEmpty && albummid.isNotEmpty) {
+      cover =
+          'https://y.gtimg.cn/music/photo_new/T002R800x800M000$albummid.jpg';
+    }
+    return Album(id: id, name: name, picUrl: _emptyNull(cover));
+  }
+
+  /// item_songlist row → [Playlist]. `dissid` (numeric global id) is compatible
+  /// with [playlistDetail]'s int arg — tapping the card opens end to end.
+  Playlist _playlistFromQqcnRow(Map<String, dynamic> row) {
+    final int id = _int(row['dissid'] ?? row['dissID'] ?? row['id']);
+    final String name = _str(
+        row['dissname'] ?? row['dissName'] ?? row['title'] ?? row['name']);
+    final String cover =
+        _str(row['imgurl'] ?? row['logo'] ?? row['cover'] ?? row['pic']);
+    // web 歌单搜索里 creator 是嵌套对象 {name,...}；do_search_v2 里是扁平 nickname。
+    final dynamic cr = row['creator'];
+    final String creator = cr is Map
+        ? _str(cr['name'] ?? cr['nick'])
+        : _str(row['creator_name'] ?? row['nickname'] ?? row['nick']);
+    final int count =
+        _int(row['song_count'] ?? row['songnum'] ?? row['listennum']);
+    return Playlist(
+      id: id,
+      name: name,
+      coverUrl: _emptyNull(cover),
+      creatorName: _emptyNull(creator),
+      trackCount: count,
+    );
+  }
+
+  /// singer block row → [Artist]. Pic falls back to the CDN template from the
+  /// singer mid.
+  Artist _artistFromQqcnRow(Map<String, dynamic> row) {
+    final int id = _int(row['singerid'] ?? row['id'] ?? row['singerID']);
+    final String name =
+        _str(row['singername'] ?? row['name'] ?? row['singerName']);
+    final String mid =
+        _str(row['singermid'] ?? row['singerMID'] ?? row['mid']);
+    String pic = _str(row['singerpic'] ?? row['pic'] ?? row['avatar']);
+    if (pic.isEmpty && mid.isNotEmpty) {
+      pic = 'https://y.gtimg.cn/music/photo_new/T001R800x800M000$mid.jpg';
+    }
+    return Artist(id: id, name: name, picUrl: _emptyNull(pic));
+  }
 
   /// Builds a [Song] from an Android search / playlist row. The canonical id is
   /// `mid` (songmid) — stashed in [ref] under both `mid` and `songmid` so
