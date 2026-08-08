@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/kugou_account.dart';
-import '../../models/qq_login.dart';
+import '../../models/kugougn_account.dart';
+import '../../models/qqcn_login.dart';
 import '../../models/qr_login.dart';
 import '../../state/auth_provider.dart';
 import '../../state/kugou_auth_provider.dart';
+import '../../state/kugougn_auth_provider.dart';
 import '../../state/kuwo_auth_provider.dart';
-import '../../state/qq_auth_provider.dart';
+import '../../state/qqcn_auth_provider.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_dimens.dart';
 import '../../theme/app_typography.dart';
@@ -27,10 +29,12 @@ class LoginPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     Widget body;
     switch (source) {
-      case 'qq':
-        body = const _QqLogin();
+      case 'qqcn':
+        body = const _QqcnLogin();
       case 'kugou':
         body = const _KugouLogin();
+      case 'kugougn':
+        body = const _KugougnLogin();
       case 'kuwo':
         body = const _KuwoLogin();
       case 'netease':
@@ -188,66 +192,82 @@ String _neteaseStatus(QrStatus s) {
   }
 }
 
+
 // ---------------------------------------------------------------------------
-// QQ
+// QQ 音乐（安卓客户端）— independent qqcn source
 // ---------------------------------------------------------------------------
 
-class _QqLogin extends StatefulWidget {
-  const _QqLogin();
+class _QqcnLogin extends StatefulWidget {
+  const _QqcnLogin();
 
   @override
-  State<_QqLogin> createState() => _QqLoginState();
+  State<_QqcnLogin> createState() => _QqcnLoginState();
 }
 
-class _QqLoginState extends State<_QqLogin> {
+class _QqcnLoginState extends State<_QqcnLogin> {
+  // Cached in didChangeDependencies so dispose() never does an unsafe
+  // context.read on a deactivated element (that throws "ancestor is unsafe").
+  QqcnAuthProvider? _auth;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<QqAuthProvider>().startLogin(QqLoginMethod.qq);
+      if (mounted) context.read<QqcnAuthProvider>().startLogin(QqcnLoginMethod.qq);
     });
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _auth = context.read<QqcnAuthProvider>();
+  }
+
+  @override
   void dispose() {
-    context.read<QqAuthProvider>().cancelLogin();
+    _auth?.cancelLogin();
     super.dispose();
   }
 
-  void _start(QqLoginMethod m) =>
-      context.read<QqAuthProvider>().startLogin(m);
+  void _start(QqcnLoginMethod m) =>
+      context.read<QqcnAuthProvider>().startLogin(m);
 
   @override
   Widget build(BuildContext context) {
-    final QqAuthProvider auth = context.watch<QqAuthProvider>();
+    final QqcnAuthProvider auth = context.watch<QqcnAuthProvider>();
     if (auth.isLoggedIn) return const _LoginSuccess();
+    // 桌面端两条路（QQmusic_Android/analysis/progress.md L266-288）：
+    // QQ = ptlogin（手机QQ 扫码），微信 = 微信开放平台 OAuth（微信 App 扫码）。
+    final bool wx = auth.method == QqcnLoginMethod.wechat;
     return _QrColumn(
-      title: 'QQ音乐扫码登录',
+      title: 'QQ音乐(安卓)扫码登录',
       content: null,
       bytes: auth.qrImage,
       loading: auth.qrLoading,
-      status: auth.finishingLogin ? '正在登录…' : _qqStatus(auth.qrStatus),
+      status: auth.finishingLogin
+          ? '正在登录…'
+          : _qqcnStatus(auth.qrStatus, wechat: wx),
       onRefresh: () => _start(auth.method),
-      extraTop: _MethodToggle(method: auth.method, onChanged: _start),
+      extraTop: _QqcnMethodToggle(method: auth.method, onChanged: _start),
     );
   }
 }
 
-class _MethodToggle extends StatelessWidget {
-  final QqLoginMethod method;
-  final void Function(QqLoginMethod) onChanged;
-  const _MethodToggle({required this.method, required this.onChanged});
+class _QqcnMethodToggle extends StatelessWidget {
+  final QqcnLoginMethod method;
+  final void Function(QqcnLoginMethod) onChanged;
+  const _QqcnMethodToggle({required this.method, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        _chip('QQ 扫码', method == QqLoginMethod.qq,
-            () => onChanged(QqLoginMethod.qq)),
+        _chip('QQ 扫码', method == QqcnLoginMethod.qq,
+            () => onChanged(QqcnLoginMethod.qq)),
         const SizedBox(width: AppDimens.space8),
-        _chip('微信 扫码', method == QqLoginMethod.wechat,
-            () => onChanged(QqLoginMethod.wechat)),
+        _chip('微信 扫码', method == QqcnLoginMethod.wechat,
+            () => onChanged(QqcnLoginMethod.wechat)),
       ],
     );
   }
@@ -278,19 +298,19 @@ class _MethodToggle extends StatelessWidget {
   }
 }
 
-String _qqStatus(QqQrStatus s) {
+String _qqcnStatus(QqcnQrStatus s, {bool wechat = false}) {
   switch (s) {
-    case QqQrStatus.waiting:
-      return '请使用对应 App 扫描上方二维码';
-    case QqQrStatus.scanned:
+    case QqcnQrStatus.waiting:
+      return wechat ? '请使用微信扫描上方二维码' : '请使用手机 QQ 扫描上方二维码';
+    case QqcnQrStatus.scanned:
       return '已扫描，请在手机上确认';
-    case QqQrStatus.confirmed:
+    case QqcnQrStatus.confirmed:
       return '登录成功';
-    case QqQrStatus.expired:
+    case QqcnQrStatus.expired:
       return '二维码已过期，请点击刷新';
-    case QqQrStatus.canceled:
+    case QqcnQrStatus.canceled:
       return '已取消，请点击刷新重试';
-    case QqQrStatus.unknown:
+    case QqcnQrStatus.unknown:
       return '正在生成二维码…';
   }
 }
@@ -348,6 +368,132 @@ String _kugouStatus(KugouQrStatus s) {
       return '二维码已过期，请点击刷新';
     case KugouQrStatus.unknown:
       return '正在生成二维码…';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Kugou 概念版 (phone + SMS verify code)
+// ---------------------------------------------------------------------------
+
+class _KugougnLogin extends StatefulWidget {
+  const _KugougnLogin();
+
+  @override
+  State<_KugougnLogin> createState() => _KugougnLoginState();
+}
+
+class _KugougnLoginState extends State<_KugougnLogin> {
+  final TextEditingController _phone = TextEditingController();
+  final TextEditingController _code = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Fresh flow each visit (the 概念版 backend uses a phone number + SMS verify
+    // code, not a scannable QR).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<KugougnAuthProvider>().resetLogin();
+    });
+  }
+
+  @override
+  void dispose() {
+    _phone.dispose();
+    _code.dispose();
+    super.dispose();
+  }
+
+  Future<void> _sendCode() async {
+    final String phone = _phone.text.trim();
+    if (phone.isEmpty) return;
+    await context.read<KugougnAuthProvider>().sendMobileCode(phone);
+  }
+
+  Future<void> _submit() async {
+    await context
+        .read<KugougnAuthProvider>()
+        .loginWithVerifyCode(_phone.text.trim(), _code.text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final KugougnAuthProvider auth = context.watch<KugougnAuthProvider>();
+    if (auth.isLoggedIn) return const _LoginSuccess();
+    final bool sending = auth.loginStage == KugougnLoginStage.sendingCode;
+    final bool loggingIn = auth.loginStage == KugougnLoginStage.loggingIn;
+    final bool codeReady = auth.awaitingCode;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Text('酷狗概念版登录',
+            style: AppTypography.titleM, textAlign: TextAlign.center),
+        const SizedBox(height: AppDimens.space8),
+        Text('输入手机号获取短信验证码登录',
+            style: AppTypography.label, textAlign: TextAlign.center),
+        const SizedBox(height: AppDimens.space20),
+        _field(_phone, '手机号', Icons.smartphone_rounded,
+            keyboardType: TextInputType.phone),
+        const SizedBox(height: AppDimens.space12),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: _field(_code, '短信验证码', Icons.sms_outlined,
+                  keyboardType: TextInputType.number),
+            ),
+            const SizedBox(width: AppDimens.space12),
+            DkSecondaryButton(
+              label: sending ? '发送中…' : '获取验证码',
+              onPressed: sending ? null : _sendCode,
+            ),
+          ],
+        ),
+        if (auth.loginError != null) ...<Widget>[
+          const SizedBox(height: AppDimens.space12),
+          Text(auth.loginError!,
+              textAlign: TextAlign.center,
+              style: AppTypography.caption
+                  .copyWith(color: const Color(0xFFEF4444))),
+        ],
+        const SizedBox(height: AppDimens.space20),
+        Center(
+          child: DkPrimaryButton(
+            icon: Icons.login_rounded,
+            label: loggingIn ? '登录中…' : '登录',
+            onPressed: (loggingIn || !codeReady) ? null : _submit,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _field(
+    TextEditingController c,
+    String hint,
+    IconData icon, {
+    TextInputType? keyboardType,
+  }) {
+    return TextField(
+      controller: c,
+      keyboardType: keyboardType,
+      style: AppTypography.body,
+      onSubmitted: (_) => _submit(),
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: AppTypography.label,
+        prefixIcon: Icon(icon, color: AppColors.onFaint, size: 20),
+        filled: true,
+        fillColor: AppColors.glass,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(AppDimens.radiusMd),
+          borderSide: const BorderSide(color: AppColors.glassBorder),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(AppDimens.radiusMd),
+          borderSide: const BorderSide(color: AppColors.accentPlay),
+        ),
+      ),
+    );
   }
 }
 

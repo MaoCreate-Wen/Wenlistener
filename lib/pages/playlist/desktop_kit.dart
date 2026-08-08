@@ -1189,8 +1189,12 @@ class _DkSourceBadge extends StatelessWidget {
         label = 'QQ';
       case MusicSource.kugou:
         label = '酷狗';
+      case MusicSource.kugougn:
+        label = '概念';
       case MusicSource.kuwo:
         label = '酷我';
+      case MusicSource.qqcn:
+        label = 'QQ安';
       case MusicSource.local:
         label = '本地';
     }
@@ -1672,11 +1676,13 @@ class DkVipPill extends StatelessWidget {
 // Source metadata shared by settings + login + accounts
 // ---------------------------------------------------------------------------
 
-/// The four selectable UI music sources (QQ is wired into the `migu` slot).
+/// The selectable UI music sources. The old web QQ (`migu` slot) was removed;
+/// [MusicSource.qqcn] (Android QQ) is the only QQ source now.
 const List<MusicSource> dkSelectableSources = <MusicSource>[
   MusicSource.netease,
-  MusicSource.migu,
+  MusicSource.qqcn,
   MusicSource.kugou,
+  MusicSource.kugougn,
   MusicSource.kuwo,
 ];
 
@@ -1689,8 +1695,12 @@ String dkSourceLabel(MusicSource s) {
       return 'QQ音乐';
     case MusicSource.kugou:
       return '酷狗音乐';
+    case MusicSource.kugougn:
+      return '酷狗概念版';
     case MusicSource.kuwo:
       return '酷我音乐';
+    case MusicSource.qqcn:
+      return 'QQ音乐';
     case MusicSource.local:
       return '本地音乐';
   }
@@ -1704,8 +1714,12 @@ IconData dkSourceIcon(MusicSource s) {
       return Icons.music_note_rounded;
     case MusicSource.kugou:
       return Icons.headphones_rounded;
+    case MusicSource.kugougn:
+      return Icons.auto_awesome_rounded;
     case MusicSource.kuwo:
       return Icons.radio_rounded;
+    case MusicSource.qqcn:
+      return Icons.music_note_outlined;
     case MusicSource.local:
       return Icons.folder_outlined;
   }
@@ -1720,8 +1734,12 @@ String dkSourceLoginToken(MusicSource s) {
       return 'netease';
     case MusicSource.kugou:
       return 'kugou';
+    case MusicSource.kugougn:
+      return 'kugougn';
     case MusicSource.kuwo:
       return 'kuwo';
+    case MusicSource.qqcn:
+      return 'qqcn';
     case MusicSource.local:
       return 'netease';
   }

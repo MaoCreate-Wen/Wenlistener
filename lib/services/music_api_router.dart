@@ -21,19 +21,28 @@ import 'resource_cache.dart';
 /// source — so a mixed-source local playlist (网易 / 咪咕 / 酷狗 in one list) plays
 /// and shows lyrics end to end no matter which source is currently selected.
 class MusicApiRouter extends ChangeNotifier implements MusicApi {
-  final MusicApi migu;
   final MusicApi netease;
   final MusicApi kugou;
+
+  /// Kugou 概念版 (FreeListen/Lite Android) — a SEPARATE source from [kugou] (web),
+  /// with its own phone-login account and Android play/lyric/签到 endpoints.
+  final MusicApi kugougn;
   final MusicApi kuwo;
+
+  /// QQ 音乐（安卓客户端）— an INDEPENDENT source from the web QQ that occupies the
+  /// `migu` slot: its own `qqcn_*` API / crypto / cookie session and Android
+  /// `musics.fcg` play/lyric/login chain.
+  final MusicApi qqcn;
 
   /// Backend for user-imported on-device files ([MusicSource.local]).
   final MusicApi local;
   MusicSource _source;
 
   MusicApiRouter({
-    required this.migu,
     required this.netease,
     required this.kugou,
+    required this.kugougn,
+    required this.qqcn,
     MusicApi? kuwo,
     this.local = const LocalMusicApi(),
     MusicSource initial = MusicSource.netease,
@@ -44,14 +53,19 @@ class MusicApiRouter extends ChangeNotifier implements MusicApi {
 
   MusicApi _backendFor(MusicSource source) {
     switch (source) {
+      // web QQ（旧 migu 槽）已移除；残留的 migu-tagged 旧歌回落到网易（不会新增）。
       case MusicSource.migu:
-        return migu;
+        return netease;
       case MusicSource.netease:
         return netease;
       case MusicSource.kugou:
         return kugou;
+      case MusicSource.kugougn:
+        return kugougn;
       case MusicSource.kuwo:
         return kuwo;
+      case MusicSource.qqcn:
+        return qqcn;
       case MusicSource.local:
         return local;
     }

@@ -15,6 +15,8 @@ import 'services/cookie_store.dart';
 import 'services/fft_service.dart';
 import 'services/kugou_account_store.dart';
 import 'services/kugou_api.dart';
+import 'services/kugougn_account_store.dart';
+import 'services/kugougn_api.dart';
 import 'services/kuwo_api.dart';
 import 'services/kuwo_cookie_store.dart';
 import 'services/local_music_scanner.dart';
@@ -22,18 +24,19 @@ import 'services/local_playlist_store.dart';
 import 'services/music_api_router.dart';
 import 'services/netease_api.dart';
 import 'services/netease_crypto.dart';
-import 'services/qq_api.dart';
-import 'services/qq_cookie_store.dart';
+import 'services/qqcn_api.dart';
+import 'services/qqcn_cookie_store.dart';
 import 'shell/desktop_window_frame.dart';
 import 'shell/fullscreen_controller.dart';
 import 'shell/nav_history.dart';
 import 'state/auth_provider.dart';
 import 'state/kugou_auth_provider.dart';
+import 'state/kugougn_auth_provider.dart';
 import 'state/kuwo_auth_provider.dart';
 import 'state/library_provider.dart';
 import 'state/local_playlist_provider.dart';
 import 'state/player_provider.dart';
-import 'state/qq_auth_provider.dart';
+import 'state/qqcn_auth_provider.dart';
 import 'state/search_provider.dart';
 import 'state/settings_provider.dart';
 import 'theme/app_theme.dart';
@@ -77,9 +80,10 @@ class WenListenerApp extends StatelessWidget {
   final Dio dio;
   final NeteaseCrypto crypto;
   final NeteaseApi neteaseApi;
-  final QqApi qqApi;
-  final QqCookieStore qqCookies;
+  final QqcnApi qqcnApi;
+  final QqcnCookieStore qqcnCookies;
   final KugouApi kugouApi;
+  final KugougnApi kugougnApi;
   final KuwoApi kuwoApi;
   final KuwoCookieStore kuwoCookies;
   final MusicApiRouter musicApi;
@@ -94,9 +98,10 @@ class WenListenerApp extends StatelessWidget {
     required this.dio,
     required this.crypto,
     required this.neteaseApi,
-    required this.qqApi,
-    required this.qqCookies,
+    required this.qqcnApi,
+    required this.qqcnCookies,
     required this.kugouApi,
+    required this.kugougnApi,
     required this.kuwoApi,
     required this.kuwoCookies,
     required this.musicApi,
@@ -128,7 +133,7 @@ class WenListenerApp extends StatelessWidget {
         Provider<Dio>.value(value: dio),
         Provider<NeteaseCrypto>.value(value: crypto),
         Provider<NeteaseApi>.value(value: neteaseApi),
-        Provider<QqApi>.value(value: qqApi),
+        Provider<QqcnApi>.value(value: qqcnApi),
         Provider<AudioService>.value(value: audio),
         Provider<ArtworkPalette>.value(value: palette),
         Provider<FftService>.value(value: fft),
@@ -183,13 +188,25 @@ class WenListenerApp extends StatelessWidget {
             router: musicApi,
           ),
         ),
-        // QQ: eager so a restored session validates at startup (QQ needs a login
-        // for everything, so this gates the whole source).
-        ChangeNotifierProvider<QqAuthProvider>(
+        // Kugou 概念版 (separate source, separate account): eager for the same
+        // reason — re-install the persisted 概念版 account into KugougnApi at start.
+        Provider<KugougnApi>.value(value: kugougnApi),
+        ChangeNotifierProvider<KugougnAuthProvider>(
           lazy: false,
-          create: (_) => QqAuthProvider(
-            api: qqApi,
-            cookies: qqCookies,
+          create: (_) => KugougnAuthProvider(
+            api: kugougnApi,
+            store: KugougnAccountStore(),
+            router: musicApi,
+          ),
+        ),
+        // QQ 音乐（安卓客户端）— INDEPENDENT source, own qqcn_* session. Eager so a
+        // restored session validates at startup (like the web QQ above).
+        Provider<QqcnApi>.value(value: qqcnApi),
+        ChangeNotifierProvider<QqcnAuthProvider>(
+          lazy: false,
+          create: (_) => QqcnAuthProvider(
+            api: qqcnApi,
+            cookies: qqcnCookies,
             router: musicApi,
           ),
         ),

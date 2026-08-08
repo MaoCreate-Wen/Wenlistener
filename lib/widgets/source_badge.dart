@@ -14,8 +14,12 @@ String sourceLabel(MusicSource source) {
       return 'QQ音乐';
     case MusicSource.kugou:
       return '酷狗';
+    case MusicSource.kugougn:
+      return '概念版';
     case MusicSource.kuwo:
       return '酷我';
+    case MusicSource.qqcn:
+      return 'QQ音乐(安卓)';
     case MusicSource.local:
       return '本地';
   }

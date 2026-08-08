@@ -4,32 +4,32 @@ import 'dart:typed_data';
 import 'package:flutter/widgets.dart';
 
 import '../models/cookie_account.dart';
-import '../models/qq_login.dart';
+import '../models/qqcn_login.dart';
 import '../services/cookie_account_store.dart';
 import '../services/music_api_router.dart';
-import '../services/qq_api.dart';
-import '../services/qq_cookie_store.dart';
+import '../services/qqcn_api.dart';
+import '../services/qqcn_cookie_store.dart';
 
 /// QR-login state machine for QQ Music, supporting BOTH scan methods (微信 / QQ,
 /// per QQMUSIC_API.md). Mirrors the Netease [AuthProvider]: create a session,
 /// poll every 2s (300s timeout), and on confirmation finish the OAuth handoff
-/// ([QqApi.completeLogin]) so the `qm_keyst` session cookie lands — then
+/// ([QqcnApi.completeLogin]) so the `qm_keyst` session cookie lands — then
 /// `router.refresh()` reloads the (now non-empty) QQ feeds. Cookie-based single
 /// account (the jar is the persistence), like Netease.
 ///
 /// Background-resilient: the user leaves the app to scan, so an on-resume
 /// [pollNow] catches a confirmation that arrived while backgrounded.
-class QqAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
-  final QqApi api;
-  final QqCookieStore cookies;
+class QqcnAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
+  final QqcnApi api;
+  final QqcnCookieStore cookies;
   final MusicApiRouter router;
 
-  QqAuthProvider({
+  QqcnAuthProvider({
     required this.api,
     required this.cookies,
     required this.router,
     CookieAccountStore? accountStore,
-  }) : _store = accountStore ?? const CookieAccountStore('qq_accounts.json') {
+  }) : _store = accountStore ?? const CookieAccountStore('qqcn_accounts.json') {
     _isLoggedIn = cookies.isLoggedIn;
     // Drop the session when a server-side verify confirms it's expired.
     api.onSessionExpired = _handleSessionExpired;
@@ -60,7 +60,7 @@ class QqAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
   /// Guards [_handleSessionExpired] so a burst of failing calls fires one cycle.
   bool _handlingExpiry = false;
 
-  /// Handles a confirmed session expiry from [QqApi.verifyLoginState]. Drops the
+  /// Handles a confirmed session expiry from [QqcnApi.verifyLoginState]. Drops the
   /// dead account (falling back to the next saved one, or logged-out) so the
   /// settings account section re-shows the QR prompt. QQ has no documented
   /// silent-refresh endpoint, so recovery is a fresh scan.
@@ -87,10 +87,10 @@ class QqAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
   static const Duration _timeout = Duration(seconds: 300);
 
   bool _isLoggedIn = false;
-  QqAccount? _account;
-  QqLoginMethod _method = QqLoginMethod.qq;
+  QqcnAccount? _account;
+  QqcnLoginMethod _method = QqcnLoginMethod.qq;
   Uint8List? _qrImage;
-  QqQrStatus _qrStatus = QqQrStatus.unknown;
+  QqcnQrStatus _qrStatus = QqcnQrStatus.unknown;
   bool _qrLoading = false;
   bool _polling = false;
   String? _pollKey;
@@ -103,10 +103,10 @@ class QqAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
   int _gen = 0;
 
   bool get isLoggedIn => _isLoggedIn;
-  QqAccount? get account => _account;
-  QqLoginMethod get method => _method;
+  QqcnAccount? get account => _account;
+  QqcnLoginMethod get method => _method;
   Uint8List? get qrImage => _qrImage;
-  QqQrStatus get qrStatus => _qrStatus;
+  QqcnQrStatus get qrStatus => _qrStatus;
   bool get qrLoading => _qrLoading;
 
   /// Scan confirmed, OAuth handoff in flight — show "正在登录…", not "登录成功".
@@ -118,7 +118,7 @@ class QqAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> _refreshAccount() async {
     try {
-      final QqAccount? acct = await api.accountProfile();
+      final QqcnAccount? acct = await api.accountProfile();
       _isLoggedIn = cookies.isLoggedIn;
       _account = acct;
     } catch (_) {
@@ -132,10 +132,12 @@ class QqAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Snapshots the live jar + profile into the saved-account set (keyed by uin).
   Future<void> _captureActiveAccount() async {
-    final QqAccount? acct = _account;
+    final QqcnAccount? acct = _account;
     if (acct == null || acct.uin.isEmpty || acct.uin == '0') return;
     final Map<String, String> snap = await cookies.snapshot();
-    if ((snap['qm_keyst'] ?? snap['qqmusic_key'] ?? '').isEmpty) return;
+    // The Android session key is `authst` (the web `qm_keyst` equivalent) — only
+    // capture a fully-landed session into the saved-account set.
+    if ((snap['authst'] ?? '').isEmpty) return;
     final CookieAccount ca = CookieAccount(
       id: acct.uin,
       nickname: acct.nickname,
@@ -198,28 +200,28 @@ class QqAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Starts (or restarts) a scan-login with [method] — a new call supersedes any
   /// in-flight session (via [_gen]), so toggling 微信↔QQ cleanly swaps the QR.
-  Future<void> startLogin(QqLoginMethod method) async {
+  Future<void> startLogin(QqcnLoginMethod method) async {
     final int myGen = ++_gen;
     _method = method;
     _polling = true;
     _qrLoading = true;
-    _qrStatus = QqQrStatus.unknown;
+    _qrStatus = QqcnQrStatus.unknown;
     _qrImage = null;
     notifyListeners();
     try {
-      final QqQrSession session = await api.qrCreate(method);
+      final QqcnQrSession session = await api.qrCreate(method);
       if (_gen != myGen) return; // superseded while creating
       _qrImage = session.image;
       _pollKey = session.pollKey;
       _qrLoading = false;
-      _qrStatus = QqQrStatus.waiting;
+      _qrStatus = QqcnQrStatus.waiting;
       notifyListeners();
       await _pollLoop(myGen, method, session.pollKey);
     } catch (e) {
-      debugPrint('QqAuthProvider.startLogin failed: $e');
+      debugPrint('QqcnAuthProvider.startLogin failed: $e');
       if (_gen == myGen) {
         _qrLoading = false;
-        _qrStatus = QqQrStatus.unknown;
+        _qrStatus = QqcnQrStatus.unknown;
         notifyListeners();
       }
     } finally {
@@ -230,27 +232,27 @@ class QqAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _pollLoop(int gen, QqLoginMethod method, String key) async {
+  Future<void> _pollLoop(int gen, QqcnLoginMethod method, String key) async {
     final DateTime deadline = DateTime.now().add(_timeout);
     while (_gen == gen && _polling && DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(_interval);
       if (_gen != gen || !_polling) return;
       if (await _pollOnce(method, key)) return;
     }
-    if (_gen == gen && _polling && _qrStatus != QqQrStatus.confirmed) {
-      _qrStatus = QqQrStatus.expired;
+    if (_gen == gen && _polling && _qrStatus != QqcnQrStatus.confirmed) {
+      _qrStatus = QqcnQrStatus.expired;
       notifyListeners();
     }
   }
 
   /// One poll. Returns true when finished (confirmed / expired / canceled).
-  Future<bool> _pollOnce(QqLoginMethod method, String key) async {
+  Future<bool> _pollOnce(QqcnLoginMethod method, String key) async {
     if (_pollInFlight) return false;
     _pollInFlight = true;
     try {
-      final QqQrPoll res = await api.qrPoll(method, key);
+      final QqcnQrPoll res = await api.qrPoll(method, key);
       _qrStatus = res.status;
-      if (res.status == QqQrStatus.confirmed) {
+      if (res.status == QqcnQrStatus.confirmed) {
         // The scan confirmed, but login isn't done until the OAuth handoff lands
         // the qm_keyst session — surface a "正在登录…" state while it runs.
         _finishing = true;
@@ -266,10 +268,10 @@ class QqAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
         return true;
       }
       notifyListeners();
-      return res.status == QqQrStatus.expired ||
-          res.status == QqQrStatus.canceled;
+      return res.status == QqcnQrStatus.expired ||
+          res.status == QqcnQrStatus.canceled;
     } catch (e) {
-      debugPrint('QqAuthProvider.qrPoll error: $e');
+      debugPrint('QqcnAuthProvider.qrPoll error: $e');
       return false;
     } finally {
       _pollInFlight = false;
@@ -312,7 +314,7 @@ class QqAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
     await api.logout();
     _isLoggedIn = false;
     _account = null;
-    _qrStatus = QqQrStatus.unknown;
+    _qrStatus = QqcnQrStatus.unknown;
     _qrImage = null;
     notifyListeners();
     router.refresh();

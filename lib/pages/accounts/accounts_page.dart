@@ -7,7 +7,7 @@ import '../../models/song.dart';
 import '../../state/auth_provider.dart';
 import '../../state/kugou_auth_provider.dart';
 import '../../state/kuwo_auth_provider.dart';
-import '../../state/qq_auth_provider.dart';
+import '../../state/qqcn_auth_provider.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_dimens.dart';
 import '../../theme/app_typography.dart';
@@ -29,7 +29,7 @@ class AccountsBody extends StatelessWidget {
       spacing: AppDimens.sectionGap,
       children: <Widget>[
         _NeteaseCard(),
-        _QqCard(),
+        _QqcnCard(),
         _KugouCard(),
         _KuwoCard(),
       ],
@@ -222,20 +222,20 @@ class _NeteaseCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// QQ (migu slot)
+// QQ 音乐（安卓客户端）— independent qqcn source
 // ---------------------------------------------------------------------------
 
-class _QqCard extends StatelessWidget {
-  const _QqCard();
+class _QqcnCard extends StatelessWidget {
+  const _QqcnCard();
 
   @override
   Widget build(BuildContext context) {
-    final QqAuthProvider auth = context.watch<QqAuthProvider>();
+    final QqcnAuthProvider auth = context.watch<QqcnAuthProvider>();
     final List<CookieAccount> accounts = auth.accounts;
     return _SourceCard(
-      source: MusicSource.migu,
+      source: MusicSource.qqcn,
       children: accounts.isEmpty
-          ? <Widget>[const _EmptyAccounts('尚未登录任何 QQ音乐账号')]
+          ? <Widget>[const _EmptyAccounts('尚未登录任何 QQ音乐(安卓) 账号')]
           : <Widget>[
               for (final CookieAccount a in accounts)
                 _AccountTile(

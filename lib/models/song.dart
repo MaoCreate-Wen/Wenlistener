@@ -4,7 +4,7 @@ import 'artist.dart';
 /// Which backend a [Song] (and the API call needed to play/lyric it) belongs to.
 /// [local] is an on-device file imported by the user (played from a `file://`
 /// path, not a network backend).
-enum MusicSource { migu, netease, kugou, kuwo, local }
+enum MusicSource { migu, netease, kugou, kugougn, kuwo, local, qqcn }
 
 /// A playable track. Built from a Netease cloudsearch/detail row
 /// ([Song.fromSearchJson]/[Song.fromDetailJson]) or a Migu search row

@@ -16,6 +16,7 @@ import 'services/cookie_store.dart';
 import 'services/dio_factory.dart';
 import 'services/fft_service.dart';
 import 'services/kugou_api.dart';
+import 'services/kugougn_api.dart';
 import 'services/kuwo_api.dart';
 import 'services/kuwo_cookie_store.dart';
 import 'services/mem_probe.dart';
@@ -23,8 +24,8 @@ import 'services/music_api_router.dart';
 import 'services/netease_api.dart';
 import 'services/netease_crypto.dart';
 import 'services/playback_store.dart';
-import 'services/qq_api.dart';
-import 'services/qq_cookie_store.dart';
+import 'services/qqcn_api.dart';
+import 'services/qqcn_cookie_store.dart';
 import 'services/settings_store.dart';
 import 'shell/tray_controller.dart';
 import 'state/settings_provider.dart';
@@ -100,12 +101,15 @@ Future<void> main() async {
   const NeteaseCrypto crypto = NeteaseCrypto();
   final NeteaseApi neteaseApi =
       NeteaseApi(dio: dio, crypto: crypto, cookies: cookieStore);
-  // QQ Music occupies the router's `migu` slot; its own cookie jar backs
-  // search/play/lyric.
-  final QqCookieStore qqCookies = await QqCookieStore.create();
-  final QqApi qqApi = QqApi(cookies: qqCookies);
-  // Anonymous Kugou (酷狗) — signs each request; a full login unlocks play.
+  // QQ 音乐（安卓客户端）— the QQ source (its own qqcn_* session + jar). The old
+  // web QQ (`migu` slot) was removed; only this Android QQ remains.
+  final QqcnCookieStore qqcnCookies = await QqcnCookieStore.create();
+  final QqcnApi qqcnApi = QqcnApi(cookies: qqcnCookies);
+  // Anonymous Kugou (酷狗 web) — signs each request; a full login unlocks play.
   final KugouApi kugouApi = KugouApi();
+  // Kugou 概念版 (FreeListen/Lite Android) — a SEPARATE source; its own phone-login
+  // account and Android play/lyric/签到 endpoints.
+  final KugougnApi kugougnApi = KugougnApi();
   // Kuwo (酷我) — anonymous search + lyrics; play URL best with login cookies.
   final KuwoCookieStore kuwoCookies = KuwoCookieStore();
   await kuwoCookies.load();
@@ -117,10 +121,11 @@ Future<void> main() async {
 
   // (H) ROUTER — multiplex the four backends; initial source from settings.
   final MusicApiRouter musicApi = MusicApiRouter(
-    migu: qqApi,
     netease: neteaseApi,
     kugou: kugouApi,
+    kugougn: kugougnApi,
     kuwo: kuwoApi,
+    qqcn: qqcnApi,
     initial: settingsData.source,
   );
 
@@ -170,9 +175,10 @@ Future<void> main() async {
       dio: dio,
       crypto: crypto,
       neteaseApi: neteaseApi,
-      qqApi: qqApi,
-      qqCookies: qqCookies,
+      qqcnApi: qqcnApi,
+      qqcnCookies: qqcnCookies,
       kugouApi: kugouApi,
+      kugougnApi: kugougnApi,
       kuwoApi: kuwoApi,
       kuwoCookies: kuwoCookies,
       musicApi: musicApi,

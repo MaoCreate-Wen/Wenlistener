@@ -7,8 +7,9 @@ import '../pages/login/login_dialog.dart';
 import '../pages/settings/settings_dialog.dart';
 import '../state/auth_provider.dart';
 import '../state/kugou_auth_provider.dart';
+import '../state/kugougn_auth_provider.dart';
 import '../state/kuwo_auth_provider.dart';
-import '../state/qq_auth_provider.dart';
+import '../state/qqcn_auth_provider.dart';
 import '../state/settings_provider.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_dimens.dart';
@@ -30,10 +31,16 @@ class AccountMenuButton extends StatelessWidget {
     switch (source) {
       case MusicSource.netease:
         context.read<AuthProvider>().logout();
-      case MusicSource.migu:
-        context.read<QqAuthProvider>().logout();
+      case MusicSource.migu: // web QQ 已移除（墓碑枚举，永不作为活跃源）。
+        break;
+      case MusicSource.qqcn:
+        context.read<QqcnAuthProvider>().logout();
       case MusicSource.kugou:
         final KugouAuthProvider k = context.read<KugouAuthProvider>();
+        final String? id = k.activeUserId;
+        if (id != null) k.removeAccount(id);
+      case MusicSource.kugougn:
+        final KugougnAuthProvider k = context.read<KugougnAuthProvider>();
         final String? id = k.activeUserId;
         if (id != null) k.removeAccount(id);
       case MusicSource.kuwo:

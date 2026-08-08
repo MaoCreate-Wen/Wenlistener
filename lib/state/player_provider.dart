@@ -166,6 +166,12 @@ class PlayerProvider extends ChangeNotifier {
     _currentIndex = index.clamp(0, _queue.length - 1);
     notifyListeners();
     await audio.setQueue(songs, initialIndex: index);
+    // With shuffle on, setQueue physically reorders the play queue and leads
+    // with the tapped track; adopt that order (and its new index) so the up-next
+    // list and jumpTo indices match what will actually play.
+    _queue = audio.queue;
+    _currentIndex = audio.currentIndex;
+    notifyListeners();
   }
 
   Future<void> togglePlay() => audio.togglePlay();
@@ -215,6 +221,11 @@ class PlayerProvider extends ChangeNotifier {
   Future<void> toggleShuffle() async {
     _shuffle = !_shuffle;
     await audio.setShuffle(_shuffle);
+    // App-layer shuffle physically reorders the play queue; mirror the new order
+    // and the current track's new position so the up-next list and jumpTo stay
+    // aligned with what will play next.
+    _queue = audio.queue;
+    _currentIndex = audio.currentIndex;
     notifyListeners();
   }
 
@@ -302,6 +313,13 @@ class PlayerProvider extends ChangeNotifier {
     // next/previous) is accompanied by a PlaybackSnapshot whose _onSnapshot
     // notify carries the new index to the UI. Notifying again here would be a
     // duplicate that re-renders the page a second time on every track change.
+    //
+    // Keep the queue mirror in sync too: app-layer shuffle (and setQueue) can
+    // PHYSICALLY reorder the play queue, and that reorder is announced through
+    // this same index stream. Refreshing here — without an extra notify —
+    // guarantees currentSong (and the lyric/palette load below) resolve against
+    // the real order by the time the accompanying snapshot triggers the render.
+    _queue = audio.queue;
     _currentIndex = index;
     _maybeLoadExtras(currentSong);
   }

@@ -5,8 +5,9 @@ import '../models/song.dart';
 import '../pages/accounts/accounts_dialog.dart';
 import '../state/auth_provider.dart';
 import '../state/kugou_auth_provider.dart';
+import '../state/kugougn_auth_provider.dart';
 import '../state/kuwo_auth_provider.dart';
-import '../state/qq_auth_provider.dart';
+import '../state/qqcn_auth_provider.dart';
 import '../state/settings_provider.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_dimens.dart';
@@ -44,14 +45,8 @@ AccountView accountViewFor(BuildContext context, MusicSource source) {
             ? ((a.account?.vipType ?? 0) > 0 ? '黑胶 VIP' : '网易云')
             : '点此登录',
       );
-    case MusicSource.migu:
-      final QqAuthProvider a = context.watch<QqAuthProvider>();
-      return AccountView(
-        loggedIn: a.isLoggedIn,
-        name: a.account?.nickname,
-        avatarUrl: a.account?.avatarUrl,
-        subtitle: a.isLoggedIn ? 'QQ音乐' : '点此登录',
-      );
+    case MusicSource.migu: // web QQ 已移除（墓碑枚举，不会作为源出现）。
+      return const AccountView(loggedIn: false, subtitle: '');
     case MusicSource.kugou:
       final KugouAuthProvider a = context.watch<KugouAuthProvider>();
       return AccountView(
@@ -60,11 +55,27 @@ AccountView accountViewFor(BuildContext context, MusicSource source) {
         avatarUrl: a.active?.avatarUrl,
         subtitle: a.isLoggedIn ? '酷狗' : '点此登录',
       );
+    case MusicSource.kugougn:
+      final KugougnAuthProvider a = context.watch<KugougnAuthProvider>();
+      return AccountView(
+        loggedIn: a.isLoggedIn,
+        name: a.active?.nickname,
+        avatarUrl: a.active?.avatarUrl,
+        subtitle: a.isLoggedIn ? '概念版' : '点此登录',
+      );
     case MusicSource.kuwo:
       final KuwoAuthProvider a = context.watch<KuwoAuthProvider>();
       return AccountView(
         loggedIn: a.isLoggedIn,
         subtitle: a.isLoggedIn ? '酷我' : '账号密码登录',
+      );
+    case MusicSource.qqcn:
+      final QqcnAuthProvider a = context.watch<QqcnAuthProvider>();
+      return AccountView(
+        loggedIn: a.isLoggedIn,
+        name: a.account?.nickname,
+        avatarUrl: a.account?.avatarUrl,
+        subtitle: a.isLoggedIn ? 'QQ音乐(安卓)' : '点此登录',
       );
     case MusicSource.local:
       return const AccountView(loggedIn: false, subtitle: '本地音乐 · 免登录');

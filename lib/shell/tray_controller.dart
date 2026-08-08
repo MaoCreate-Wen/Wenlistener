@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io' show Platform, exit;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
@@ -188,16 +188,40 @@ class TrayController with TrayListener, WindowListener {
     await windowManager.hide();
   }
 
-  /// Real exit: tray icon first (never leave a zombie icon), then the window.
+  /// Real exit. Ordering + hard-kill are load-bearing (see below).
+  ///
+  /// Previous approach (dispose audio → `windowManager.destroy()`) still hung:
+  ///   1. `destroy()` is `PostQuitMessage(0)`, which races the engine/plugin COM
+  ///      teardown — a live Media Foundation object released on a torn-down COM
+  ///      apartment deadlocks;
+  ///   2. worse, `just_audio_windows`'s own `dispose()` can itself block when a
+  ///      track is loaded, so `await audio.dispose()` never returned and the ✕
+  ///      just froze the window.
+  ///
+  /// Fix: hide first so ✕ feels instant, do a best-effort graceful teardown but
+  /// under a hard timeout so nothing can wedge us, then `exit(0)` — deterministic
+  /// process termination that sidesteps the whole `destroy()`/CoUninitialize race.
+  /// The OS reclaims everything; persisted state (settings/playback) is already
+  /// written on change, so an abrupt kill loses nothing meaningful.
   Future<void> _exit() async {
     if (_quitting) return;
     _quitting = true;
+    // Window vanishes immediately — the user never sees a frozen frame.
+    try {
+      await windowManager.hide();
+    } catch (_) {}
+    // Remove the tray icon up front (fast, non-blocking) so no ghost lingers.
     try {
       await trayManager.destroy();
     } catch (e) {
       debugPrint('TrayController: tray destroy failed: $e');
     }
-    await windowManager.setPreventClose(false);
-    await windowManager.destroy();
+    // Best-effort MF release, but a hung dispose must NOT block exit.
+    try {
+      await audio.dispose().timeout(const Duration(seconds: 2));
+    } catch (e) {
+      debugPrint('TrayController: audio dispose failed/timed out: $e');
+    }
+    exit(0);
   }
 }

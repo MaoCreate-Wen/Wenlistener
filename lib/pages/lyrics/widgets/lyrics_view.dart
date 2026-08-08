@@ -377,6 +377,20 @@ class _LyricsViewState extends State<LyricsView>
     // untouched; the per-frame rebuild now comes solely from the controller's
     // isolated ListenableBuilder in [_animatedLyrics].
 
+    // ...but the LINES are a genuine build input: build → LayoutBuilder →
+    // [_syncLayout] is the ONLY path that measures line heights and pushes
+    // `setLineHeights`, so without a rebuild here a track change strands them.
+    // [_onProvider] invalidates the memo (`_syncedLines = null`) but is a raw
+    // addListener that never calls setState, and nothing else changes on a
+    // song-to-song switch (PlayerProvider deliberately holds `lyricsLoading`
+    // false to keep the old lines up). The controller's `setLines` resets every
+    // `_Line.height` to 0, so the layout would fall back to `_size.height / 5`
+    // for every line — uniform, ~46% oversized spacing — until some unrelated
+    // rebuild (opening the queue panel, which pushes a route and flips this
+    // view's ModalRoute dependency) happened to land. `Lyrics` declares no
+    // `operator==`, so this fires once per lyrics swap, never per position tick.
+    context.select<PlayerProvider, Lyrics>((PlayerProvider p) => p.lyrics);
+
     // Spinner only on the first-ever load (no lines to show yet); on a
     // song-to-song switch the previous lines stay on screen until the new ones
     // swap in (AMLL never flashes a loading state between tracks).

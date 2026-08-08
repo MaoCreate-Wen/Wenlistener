@@ -26,7 +26,8 @@ class KugouAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
     required this.store,
     required this.router,
   }) {
-    // Drop the active account when a play call reports the token expired.
+    // Drop the active account when a play call reports the token expired; the
+    // handler is guarded by activeUserId.
     api.onSessionExpired = _handleSessionExpired;
     WidgetsBinding.instance.addObserver(this);
     unawaited(_init());
@@ -87,8 +88,8 @@ class KugouAuthProvider extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  /// Installs the active account into [KugouApi] and reloads feeds so anything
-  /// gated behind the login re-resolves.
+  /// Installs the active account into both Kugou backends (web + 概念版) and reloads
+  /// feeds so anything gated behind the login re-resolves.
   void _apply() {
     api.setAccount(active);
     router.refresh();
