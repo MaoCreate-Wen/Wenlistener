@@ -1,0 +1,65 @@
+# CodeRabbit Configuration for WenListener
+# AI-powered code review for Flutter music player
+
+language: zh-CN
+
+# Review settings
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+
+# Path-based rules
+path_instructions:
+  - path: "lib/services/**"
+    instructions: |
+      - 检查 API 调用的错误处理
+      - 验证网络请求的超时和重试逻辑
+      - 确保 cookie/token 安全存储
+
+  - path: "lib/state/**"
+    instructions: |
+      - 检查 ChangeNotifier 的 dispose 实现
+      - 验证状态更新是否正确 notifyListeners
+      - 确保没有内存泄漏
+
+  - path: "lib/pages/**"
+    instructions: |
+      - 检查是否遵循单向依赖（pages → state → services）
+      - 确保页面不直接 import services/
+      - 验证 UI 响应式更新
+
+  - path: "android/**"
+    instructions: |
+      - 检查 Kotlin 代码的线程安全
+      - 验证原生通道的错误处理
+      - 确保权限声明完整
+
+  - path: "lib/animation/**"
+    instructions: |
+      - 对照 AMLL_ANIMATION_SPEC.md 验证数值
+      - 检查动画性能（60fps）
+      - 确保弹簧常量符合规格
+
+# Chat settings
+chat:
+  auto_reply: true
+
+# Knowledge base - 项目特定规则
+knowledge_base:
+  learnings:
+    - 本项目是四音源音乐播放器（网易云/QQ/酷狗/酷我）
+    - 架构严格分层：pages → state → services → models
+    - 页面禁止直接 import services/
+    - 所有网络/音频操作必须经由 4 个 Provider
+    - Flutter 路径必须用 C:\flutter\bin\flutter.bat
+    - 每次改动必须：递增版本号 + 出 release 包
+    - release 包走 R8 minify，字符串引用的资源需加入 keep.xml
+
+  optOutCodeSecurity: false
