@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' show Ticker;
 
 import '../models/image_url.dart';
+import '../services/artwork_palette.dart' show kCoverAnalysisDecodeDim;
 import '../services/resource_cache.dart' show DiskCachedImage;
 import '../theme/app_colors.dart';
 import 'mesh_gradient/album_texture.dart';
@@ -452,16 +453,17 @@ class _NeonFlowBackgroundState extends State<NeonFlowBackground>
   ) async {
     try {
       // The mesh only needs the cover downscaled to 32² (buildAlbumTexture), so
-      // decode it at 64² via ResizeImage instead of full resolution — decoding a
+      // decode it small via ResizeImage instead of full resolution — decoding a
       // ~4 MB full-res RGBA per song only to throw it away at 32² is pure waste
-      // (and it used to leak: the cover handle below was never disposed). 64²
-      // gives the low-quality downscale ample headroom; the 32² result is
-      // visually identical.
-      final ImageProvider provider = ResizeImage(
+      // (and it used to leak: the cover handle below was never disposed). Decode
+      // at the shared [kCoverAnalysisDecodeDim]² (128²) with an IDENTICAL
+      // ResizeImage construction to ArtworkPalette's, so the palette + mesh
+      // resolve ONE shared imageCache entry instead of two per song; the 32²
+      // result is visually identical.
+      final ImageProvider provider = ResizeImage.resizeIfNeeded(
+        kCoverAnalysisDecodeDim,
+        kCoverAnalysisDecodeDim,
         DiskCachedImage(url, headers: kNeteaseImageHeaders),
-        width: 64,
-        height: 64,
-        allowUpscaling: false,
       );
       final Completer<ui.Image> completer = Completer<ui.Image>();
       final ImageStream stream = provider.resolve(const ImageConfiguration());

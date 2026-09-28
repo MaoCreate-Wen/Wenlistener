@@ -810,6 +810,14 @@ class _AnimatedLayout extends StatelessWidget {
                         url: artworkUrl,
                         size: coverSize,
                         radius: AppDimens.albumRadius(coverSize),
+                        // Shared `album_art` hero endpoint: decode at one fixed,
+                        // bounded size (see ArtworkImage.heroCover). heroTag
+                        // flips to null the instant t>0.01; a fixed size keeps
+                        // the ImageCache key constant across the 380→44 morph
+                        // (remount resolves synchronously from cache — no
+                        // SkeletonBox flash) AND bounds the texture to ~5 MB so
+                        // sampling it per frame doesn't stall the raster thread.
+                        heroCover: true,
                         heroTag: (suppressed || t > 0.01)
                             ? null
                             : 'album_art',

@@ -65,6 +65,9 @@ class DesktopMiniPlayer extends StatelessWidget {
                         size: 48,
                         radius: AppDimens.radiusSm,
                         heroTag: 'album_art',
+                        // Shared hero endpoint: same bounded decode key as the
+                        // player cover for a pixel-identical flight.
+                        heroCover: true,
                       ),
                     ),
                   ),
