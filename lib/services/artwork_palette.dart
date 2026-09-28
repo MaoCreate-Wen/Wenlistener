@@ -9,6 +9,14 @@ import '../models/image_url.dart';
 import '../theme/app_colors.dart';
 import 'resource_cache.dart';
 
+/// Decode dimension for cover ANALYSIS consumers (palette quantization here,
+/// the 32² mesh-gradient texture in `NeonFlowBackground`). Both sample colour
+/// statistics, not pixels-for-display, so a 128² decode is lossless for their
+/// purposes while replacing the native-resolution decode (25-36 MB RGBA for a
+/// typical Netease cover) with a ~64 KB cache entry. Shared so both consumers
+/// construct an IDENTICAL ResizeImage provider — equal key ⇒ one decode.
+const int kCoverAnalysisDecodeDim = 128;
+
 /// Result of extracting a dynamic palette from album art.
 class PaletteResult {
   /// Dominant vibrant accent (drives progress bar, nav pill, glow, etc.).
@@ -68,61 +76,64 @@ class ArtworkPalette {
     try {
       // The image *decode* must run on the root isolate (`dart:ui`), so resolve
       // and rasterize the cover here, then hand the raw RGBA bytes off-thread.
-      // Decode at 100² via ResizeImage — DiskCachedImage ignores the
-      // ImageConfiguration size hint, so without this the cover is decoded at
-      // full resolution (~4 MB RGBA) just to quantize. ResizeImage passes
-      // cacheWidth/Height to the codec for a real downsample; the median-cut is
-      // plenty accurate at 100². Cuts the decode + toByteData + isolate copy that
-      // fire on every song switch (including background auto-advance).
+      //
+      // Decode at a SMALL fixed target ([kCoverAnalysisDecodeDim]², via
+      // ResizeImage) — median-cut palette quality is insensitive to resolution,
+      // but the raw provider decoded the cover at its native size (Netease art
+      // is routinely 2000-3000px ⇒ a 25-36 MB RGBA imageCache entry PER TRACK,
+      // measured as the dominant driver of the 400-500 MB lyrics-page working
+      // set). The 128² entry is ~64 KB and quantizes ~16k pixels instead of
+      // ~6M on the background isolate. The construction matches the mesh
+      // texture builder's exactly, so both resolve ONE shared cache entry.
       final ui.Image image = await _resolveCoverImage(
-        ResizeImage(
+        ResizeImage.resizeIfNeeded(
+          kCoverAnalysisDecodeDim,
+          kCoverAnalysisDecodeDim,
           DiskCachedImage(url, headers: kNeteaseImageHeaders),
-          width: 100,
-          height: 100,
-          allowUpscaling: false,
         ),
       );
-      // Capture dims before releasing the handle.
-      final int imgW = image.width;
-      final int imgH = image.height;
-      final ByteData? bytes =
-          await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-      // The ImageInfo.image handed to the stream listener is a clone we own; drop
-      // the native decode now we have the bytes, or one (downsampled) cover leaks
-      // per unique URL for the whole session.
-      image.dispose();
-      if (bytes == null) return PaletteResult.fallback;
+      // Free the 128² analysis handle on every exit path (early return, success,
+      // or a throw caught below) instead of leaving it live-but-unreferenced in
+      // the imageCache until LRU/GC. `image.width/height` are read below before
+      // the finally runs, so this is safe.
+      try {
+        final ByteData? bytes =
+            await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+        if (bytes == null) return PaletteResult.fallback;
 
-      // Median-cut quantize on a background isolate. fromByteData is documented
-      // isolate-safe (it never touches `dart:ui`), and PaletteGenerator/
-      // PaletteColor/PaletteTarget all use value equality, so the result safely
-      // copies back across the isolate boundary (vibrant/dominant lookups still
-      // resolve after the round trip).
-      final PaletteGenerator gen = await compute(
-        _quantizePalette,
-        EncodedImage(bytes, width: imgW, height: imgH),
-      );
+        // Median-cut quantize on a background isolate. fromByteData is documented
+        // isolate-safe (it never touches `dart:ui`), and PaletteGenerator/
+        // PaletteColor/PaletteTarget all use value equality, so the result safely
+        // copies back across the isolate boundary (vibrant/dominant lookups still
+        // resolve after the round trip).
+        final PaletteGenerator gen = await compute(
+          _quantizePalette,
+          EncodedImage(bytes, width: image.width, height: image.height),
+        );
 
-      // ---- map PaletteGenerator -> PaletteResult (derivation unchanged) ----
-      List<Color> colors = await computeImageColors(gen);
-      if (colors.isEmpty) {
-        final Color? fb = gen.vibrantColor?.color ?? gen.dominantColor?.color;
-        if (fb == null) return PaletteResult.fallback;
-        colors = <Color>[fb, AppColors.seedDeep];
+        // ---- map PaletteGenerator -> PaletteResult (derivation unchanged) ----
+        List<Color> colors = await computeImageColors(gen);
+        if (colors.isEmpty) {
+          final Color? fb = gen.vibrantColor?.color ?? gen.dominantColor?.color;
+          if (fb == null) return PaletteResult.fallback;
+          colors = <Color>[fb, AppColors.seedDeep];
+        }
+        // Keep the true dominant as the accent, then (only for covers dominated by
+        // a single hue) append synthetic depth colours so the mesh-gradient
+        // background has more than one hue to flow between — see [_enrichForDepth].
+        // Colourful covers pass through unchanged, and the dominant stays at index 0.
+        final Color accent = colors.first;
+        final List<Color> enriched = _enrichForDepth(colors);
+        final PaletteResult result = PaletteResult(
+          accent: accent,
+          colors: enriched,
+          gradient: _gradientOf(enriched),
+        );
+        _store(url, result);
+        return result;
+      } finally {
+        image.dispose();
       }
-      // Keep the true dominant as the accent, then (only for covers dominated by a
-      // single hue) append synthetic depth colours so the mesh-gradient background
-      // has more than one hue to flow between — see [_enrichForDepth]. Colourful
-      // covers pass through unchanged, and the dominant stays at index 0.
-      final Color accent = colors.first;
-      final List<Color> enriched = _enrichForDepth(colors);
-      final PaletteResult result = PaletteResult(
-        accent: accent,
-        colors: enriched,
-        gradient: _gradientOf(enriched),
-      );
-      _store(url, result);
-      return result;
     } catch (e) {
       // Any failure (decode error, timeout, empty bytes, isolate error) must
       // degrade gracefully — never throw, or it would crash the song switch.

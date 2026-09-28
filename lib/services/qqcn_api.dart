@@ -1403,10 +1403,15 @@ class QqcnApi implements MusicApi {
     try {
       data = await _getSession(
           accessToken: accessToken, openid: openid, qq: qq);
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[qqcn] silent-refresh GetSession threw: $e — keep session');
       return null; // transport failure → unknown, keep session
     }
     final String authst = _str(data['authst']);
+    debugPrint(
+        '[qqcn] silent-refresh GetSession → freshAuthst=${authst.isNotEmpty} '
+        'uid=${_str(data['uid'] ?? data['uin'])} '
+        'sid=${_str(data['sid']).isNotEmpty}');
     if (authst.isNotEmpty) {
       // Silent refresh — persist the fresh authst(vkey)/sid/uid.
       await _cookies.saveSession(<String, dynamic>{
@@ -1724,12 +1729,15 @@ class QqcnApi implements MusicApi {
   /// [songUrl]/[lyric] can read it. Tags [MusicSource.qqcn] — its OWN independent
   /// source, distinct from the web QQ in the `migu` slot.
   Song _songFromQqcnRow(Map<String, dynamic> row) {
-    final String mid = _str(row['mid']);
-    final int songid = _int(row['id']);
+    // 兼容多种 QQ 行格式：安卓(mid/id/singer[]) 与 web/榜单(songmid/songid/singerName)。
+    String mid = _str(row['mid']);
+    if (mid.isEmpty) mid = _str(row['songmid']);
+    int songid = _int(row['id']);
+    if (songid == 0) songid = _int(row['songid']);
     final int id =
         songid != 0 ? songid : (mid.isEmpty ? row.hashCode : mid.hashCode);
 
-    final List<Artist> artists =
+    List<Artist> artists =
         ((row['singer'] as List<dynamic>?) ?? const <dynamic>[])
             .whereType<Map>()
             .map((dynamic s) => Artist(
@@ -1738,6 +1746,13 @@ class QqcnApi implements MusicApi {
                 ))
             .where((Artist a) => a.name.isNotEmpty)
             .toList();
+    if (artists.isEmpty) {
+      // 榜单/旧格式：singer 是字符串或 singerName。
+      final String sn = _str(row['singerName']);
+      final String s2 =
+          sn.isNotEmpty ? sn : (row['singer'] is String ? _str(row['singer']) : '');
+      if (s2.isNotEmpty) artists = <Artist>[Artist(id: 0, name: s2)];
+    }
 
     String albumMid = '';
     String albumName = '';

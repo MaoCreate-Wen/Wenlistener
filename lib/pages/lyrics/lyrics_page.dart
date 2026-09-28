@@ -186,6 +186,9 @@ class _Header extends StatelessWidget {
               size: 44,
               radius: AppDimens.radiusSm,
               heroTag: suppressed ? null : 'album_art',
+              // Shared hero endpoint: same bounded decode key as the player
+              // cover so the flight settles onto one ImageCache entry (no flash).
+              heroCover: true,
             ),
           ),
           const SizedBox(width: AppDimens.space12),

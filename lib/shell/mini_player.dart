@@ -56,6 +56,10 @@ class MiniPlayer extends StatelessWidget {
                   size: AppDimens.miniPlayerHeight - 28,
                   radius: AppDimens.radiusSm,
                   heroTag: 'album_art',
+                  // Shared hero endpoint: same bounded decode key as the player
+                  // cover so the mini↔player flight paints one ImageCache entry
+                  // (pixel-identical, no re-decode on settle).
+                  heroCover: true,
                 ),
                 const SizedBox(width: AppDimens.space12),
                 Expanded(
